@@ -1,0 +1,39 @@
+App(
+    appid="canbus_hack",
+    name="CANHACK",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="app_main",
+    requires=["gui"],
+    stack_size=30 * 1024,
+    fap_icon="icon.png",
+    fap_category="CAN",
+    fap_icon_assets="assets",
+    fap_private_libs = [
+        Lib (
+            name = 'frame_can',
+            sources = [
+                'frame_can.c',
+            ],
+        ),
+        Lib(
+            name = 'files_scaner',
+            sources = [
+                'dir_walker.c',
+                'files_scaner.c',
+                'frame_extractor.c',
+            ],
+        ),
+        Lib(
+            name = 'log_exporter',
+            sources = [
+                'exporter_csv.c',
+            ],
+        ),
+        Lib(
+            name = 'hex_converter',
+            sources = [
+                'hex_converter.c',
+            ],
+        ),
+    ],
+)
