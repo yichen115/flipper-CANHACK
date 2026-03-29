@@ -1,5 +1,8 @@
 #include "../../app_user.h"
 
+#define SVC_SCAN_DELAY_MS       50  // Delay between each service probe
+#define SVC_KEEPALIVE_INTERVAL  50  // Send TesterPresent every N iterations
+
 static int32_t uds_service_scan_thread(void* context);
 
 void app_scene_uds_service_scan_on_enter(void* context) {
@@ -24,7 +27,6 @@ void app_scene_uds_service_scan_on_exit(void* context) {
     furi_thread_join(app->thread);
     furi_thread_free(app->thread);
     text_box_reset(app->textBox);
-    // Stop session keepalive
     uds_stop_keepalive();
 }
 
@@ -55,9 +57,20 @@ static int32_t uds_service_scan_thread(void* context) {
     text_box_set_text(app->textBox, furi_string_get_cstr(text));
 
     uint8_t found_count = 0;
+    uint16_t iter_count = 0;
 
     for(uint16_t svc_id = 0x00; svc_id <= 0xFF; svc_id++) {
         if(!furi_hal_gpio_read(&gpio_button_back)) break;
+
+        // Inter-request delay to avoid overwhelming the ECU
+        furi_delay_ms(SVC_SCAN_DELAY_MS);
+
+        // Periodic TesterPresent to maintain session
+        iter_count++;
+        if(iter_count % SVC_KEEPALIVE_INTERVAL == 0) {
+            uds_tester_present(uds);
+            furi_delay_ms(10);
+        }
 
         uint8_t data[1] = {(uint8_t)svc_id};
         CANFRAME frames_to_send[2] = {0};

@@ -19,6 +19,12 @@ FrameCANQueue* frame_can_queue_alloc() {
 }
 
 void frame_can_queue_free(FrameCANQueue* frame_queue) {
+    FrameCANQueueNode* node = frame_queue->last_node;
+    while(node != NULL) {
+        FrameCANQueueNode* next = node->next_node;
+        free(node);
+        node = next;
+    }
     free(frame_queue);
 }
 

@@ -79,16 +79,7 @@ static int32_t uds_discovery_thread(void* context) {
         scan_min,
         scan_max);
     text_box_set_text(app->textBox, furi_string_get_cstr(text));
-    
-    // Check if range is valid
-    if(scan_min > scan_max) {
-        furi_string_cat_printf(text, "Error: Start > End\n");
-        text_box_set_text(app->textBox, furi_string_get_cstr(text));
-        deinit_mcp2515(CAN);
-        free(CAN);
-        return 0;
-    }
-    
+
     if(scan_min == 0 && scan_max == 0) {
         furi_string_cat_printf(text, "Error: Range is 0\n");
         text_box_set_text(app->textBox, furi_string_get_cstr(text));
@@ -104,10 +95,12 @@ static int32_t uds_discovery_thread(void* context) {
 
         CANFRAME frame_to_send = {0};
         frame_to_send.canId = arb_id;
-        frame_to_send.data_lenght = 8;
+        frame_to_send.data_length = 8;
         frame_to_send.buffer[0] = 0x02;
         frame_to_send.buffer[1] = 0x10;
         frame_to_send.buffer[2] = 0x01;
+        // Pad remaining bytes
+        for(uint8_t i = 3; i < 8; i++) frame_to_send.buffer[i] = 0xCC;
 
         if(send_can_frame(CAN, &frame_to_send) != ERROR_OK) continue;
 

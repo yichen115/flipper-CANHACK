@@ -110,7 +110,7 @@ void default_list_for_sender_menu(App* app) {
     // This is for the
     furi_string_reset(app->text);
 
-    for(uint8_t i = 0; i < app->frame_to_send->data_lenght; i++) {
+    for(uint8_t i = 0; i < app->frame_to_send->data_length; i++) {
         if(app->frame_to_send->buffer[i] < 0x10) {
             furi_string_cat_printf(app->text, "0%x ", app->frame_to_send->buffer[i]);
         } else {
@@ -118,7 +118,7 @@ void default_list_for_sender_menu(App* app) {
         }
     }
 
-    if(app->frame_to_send->data_lenght == 0 || app->frame_to_send->req == 1) {
+    if(app->frame_to_send->data_length == 0 || app->frame_to_send->req == 1) {
         furi_string_reset(app->text);
         furi_string_cat_printf(app->text, "---");
     }
@@ -296,7 +296,7 @@ void set_frame_request_callback(VariableItem* item) {
 void set_data_length_callback(VariableItem* item) {
     App* app = variable_item_get_context(item);
 
-    app->frame_to_send->data_lenght = variable_item_get_current_value_index(item);
+    app->frame_to_send->data_length = variable_item_get_current_value_index(item);
 
     set_data_view(app);
 }
@@ -330,11 +330,11 @@ void set_data_view(App* app) {
     // fourth item [4]
     item = variable_item_list_add(app->varList, "Data Length", 9, set_data_length_callback, app);
     furi_string_reset(app->text);
-    furi_string_cat_printf(app->text, "%u", app->frame_to_send->data_lenght);
-    variable_item_set_current_value_index(item, app->frame_to_send->data_lenght);
+    furi_string_cat_printf(app->text, "%u", app->frame_to_send->data_length);
+    variable_item_set_current_value_index(item, app->frame_to_send->data_length);
     variable_item_set_current_value_text(item, furi_string_get_cstr(app->text));
 
-    for(uint8_t i = 0; i < app->frame_to_send->data_lenght; i++) {
+    for(uint8_t i = 0; i < app->frame_to_send->data_length; i++) {
         item = variable_item_list_add(app->varList, text_bytes[i], 0, NULL, app);
 
         furi_string_reset(app->text);
@@ -427,7 +427,7 @@ void app_scene_input_data_on_enter(void* context) {
             NULL,
             app,
             app->frame_to_send->buffer,
-            app->frame_to_send->data_lenght);
+            app->frame_to_send->data_length);
     }
 
     view_dispatcher_switch_to_view(app->view_dispatcher, InputByteView);
@@ -504,7 +504,7 @@ void draw_data_send(App* app, bool was_send_it, uint32_t count) {
         return;
     }
 
-    for(uint8_t i = 0; i < app->frame_to_send->data_lenght; i++) {
+    for(uint8_t i = 0; i < app->frame_to_send->data_length; i++) {
         if(app->frame_to_send->buffer[i] > 0xf) {
             furi_string_cat_printf(app->text, "%x ", app->frame_to_send->buffer[i]);
             continue;
@@ -564,7 +564,7 @@ void draw_data_send_repeat(App* app, bool was_send_it, uint32_t count, uint32_t 
         return;
     }
 
-    for(uint8_t i = 0; i < app->frame_to_send->data_lenght; i++) {
+    for(uint8_t i = 0; i < app->frame_to_send->data_length; i++) {
         if(app->frame_to_send->buffer[i] > 0xf) {
             furi_string_cat_printf(app->text, "%x ", app->frame_to_send->buffer[i]);
             continue;

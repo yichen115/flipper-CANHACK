@@ -118,8 +118,8 @@ static void write_data_on_file(CANFRAME frame, File* file, uint32_t time) {
         time,
         frame.ext ? 8 : 3,
         frame.canId,
-        frame.data_lenght);
-    for(uint8_t i = 0; i < (frame.data_lenght); i++) {
+        frame.data_length);
+    for(uint8_t i = 0; i < (frame.data_length); i++) {
         furi_string_cat_printf(text_file, "%s%02X", i ? " " : "", frame.buffer[i]);
     }
     furi_string_cat_printf(text_file, "\n");
@@ -243,9 +243,9 @@ void draw_box_text(App* app) {
         app->text,
         "ADDR: %lx DLC: %u \n",
         app->frameArray[app->sniffer_index].canId,
-        app->frameArray[app->sniffer_index].data_lenght);
+        app->frameArray[app->sniffer_index].data_length);
 
-    for(uint8_t i = 0; i < (app->frameArray[app->sniffer_index].data_lenght); i++) {
+    for(uint8_t i = 0; i < (app->frameArray[app->sniffer_index].data_length); i++) {
         furi_string_cat_printf(
             app->text, "[%u]:  %x ", i, app->frameArray[app->sniffer_index].buffer[i]);
     }

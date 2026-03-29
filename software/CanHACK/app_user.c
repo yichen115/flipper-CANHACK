@@ -10,10 +10,10 @@ void makePaths(App* app) {
     }
 }
 
-static bool app_scene_costum_callback(void* context, uint32_t costum_event) {
+static bool app_scene_custom_callback(void* context, uint32_t custom_event) {
     furi_assert(context);
     App* app = context;
-    return scene_manager_handle_custom_event(app->scene_manager, costum_event);
+    return scene_manager_handle_custom_event(app->scene_manager, custom_event);
 }
 
 static bool app_scene_back_event(void* context) {
@@ -32,7 +32,7 @@ static App* app_alloc() {
     App* app = malloc(sizeof(App));
     app->scene_manager = scene_manager_alloc(&app_scene_handlers, app);
     app->view_dispatcher = view_dispatcher_alloc();
-    view_dispatcher_set_custom_event_callback(app->view_dispatcher, app_scene_costum_callback);
+    view_dispatcher_set_custom_event_callback(app->view_dispatcher, app_scene_custom_callback);
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
     view_dispatcher_set_navigation_event_callback(app->view_dispatcher, app_scene_back_event);
     view_dispatcher_set_tick_event_callback(app->view_dispatcher, app_tick_event, 100);
@@ -59,7 +59,6 @@ static App* app_alloc() {
 
     app->dialog_ex = dialog_ex_alloc();
     view_dispatcher_add_view(app->view_dispatcher, DialogView, dialog_ex_get_view(app->dialog_ex));
-    view_dispatcher_add_view(app->view_dispatcher, SubmenuLogView, submenu_get_view(app->submenu));
     app->frame_active = frame_can_alloc();
     app->file_active = file_active_alloc();
     app->can_send_frame = (bool*)calloc(1, sizeof(bool));
@@ -107,7 +106,6 @@ static void app_free(App* app) {
     view_dispatcher_remove_view(app->view_dispatcher, SubmenuView);
     view_dispatcher_remove_view(app->view_dispatcher, ViewWidget);
     view_dispatcher_remove_view(app->view_dispatcher, TextBoxView);
-    view_dispatcher_remove_view(app->view_dispatcher, SubmenuLogView);
     view_dispatcher_remove_view(app->view_dispatcher, DialogView);
     view_dispatcher_remove_view(app->view_dispatcher, VarListView);
     view_dispatcher_remove_view(app->view_dispatcher, InputByteView);
@@ -143,6 +141,7 @@ static void app_free(App* app) {
 
     free(app->log_file_path);
     free(app->frameArray);
+    free(app->frame_to_send);
 
     free_mcp2515(app->mcp_can);
 

@@ -10,7 +10,6 @@ static uint32_t allinone_scan_end = 0x7FF;
 
 // Forward declarations
 static int32_t allinone_discovery_thread(void* context);
-static int32_t allinone_test_thread(void* context);
 static bool set_diagnostic_session(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, SessionType session);
 static void keepalive_timer_callback(void* context);
 static void start_keepalive(App* app, SessionType session);
@@ -102,7 +101,7 @@ static bool verify_key_with_ecu(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id,
     // Send key (0x27 level+1 key[key_len])
     CANFRAME frame = {0};
     frame.canId = tx_id;
-    frame.data_lenght = 2 + key_len;
+    frame.data_length = 8; // Always pad to 8 bytes
     frame.buffer[0] = 2 + key_len;  // PCI = service(1) + sub-function(1) + key_len
     frame.buffer[1] = 0x27;  // Security Access
     frame.buffer[2] = level + 1;  // Send Key sub-function
@@ -110,6 +109,10 @@ static bool verify_key_with_ecu(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id,
     // Fill key bytes (big endian)
     for(uint8_t i = 0; i < key_len && i < 4; i++) {
         frame.buffer[3 + i] = (key >> (8 * (key_len - 1 - i))) & 0xFF;
+    }
+    // Pad remaining
+    for(uint8_t i = 3 + key_len; i < 8; i++) {
+        frame.buffer[i] = 0xCC;
     }
     
     if(send_can_frame(CAN, &frame) != ERROR_OK) return false;
@@ -307,22 +310,19 @@ static void keepalive_timer_callback(void* context) {
     if(!allinone_ctx.keepalive_running || allinone_ctx.current_session == SessionType_Default) {
         return;
     }
-    
+
     // Send Tester Present (0x3E 0x80)
     // 0x80 = suppressPositiveResponseMessage, ECU will not reply
     CANFRAME frame = {0};
     frame.canId = app->uds_send_id;
-    frame.data_lenght = 3;
+    frame.data_length = 8;
     frame.buffer[0] = 0x02;  // PCI: 2 bytes following
     frame.buffer[1] = 0x3E;  // Service: TesterPresent
     frame.buffer[2] = 0x80;  // Sub-function: suppress response
-    
-    MCP2515* CAN = mcp_alloc(MCP_NORMAL, app->mcp_can->clck, app->mcp_can->bitRate);
-    if(mcp2515_init(CAN) == ERROR_OK) {
-        send_can_frame(CAN, &frame);
-        deinit_mcp2515(CAN);
-    }
-    free(CAN);
+    for(uint8_t i = 3; i < 8; i++) frame.buffer[i] = 0xCC;
+
+    // Use the app's existing MCP2515 - SPI acquire/release provides mutual exclusion
+    send_can_frame(app->mcp_can, &frame);
 }
 
 static void start_keepalive(App* app, SessionType session) {
@@ -344,10 +344,11 @@ static void stop_keepalive(void) {
 static bool set_diagnostic_session(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, SessionType session) {
     CANFRAME frame = {0};
     frame.canId = tx_id;
-    frame.data_lenght = 3;
+    frame.data_length = 8;
     frame.buffer[0] = 0x02;
     frame.buffer[1] = 0x10;
     frame.buffer[2] = session;
+    for(uint8_t i = 3; i < 8; i++) frame.buffer[i] = 0xCC;
     
     if(send_can_frame(CAN, &frame) != ERROR_OK) {
         return false;
@@ -378,11 +379,12 @@ static uint16_t* scan_dids(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, uint16_
         for(uint32_t did = start; did <= end && *count < 256; did++) {
             CANFRAME request = {0};
             request.canId = tx_id;
-            request.data_lenght = 4;
+            request.data_length = 8;
             request.buffer[0] = 0x03;
             request.buffer[1] = 0x22;
             request.buffer[2] = (uint8_t)(did >> 8);
             request.buffer[3] = (uint8_t)(did & 0xFF);
+            for(uint8_t i = 4; i < 8; i++) request.buffer[i] = 0xCC;
             
             if(send_can_frame(CAN, &request) != ERROR_OK) continue;
             
@@ -432,10 +434,11 @@ static void test_security_levels(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, S
         // Request Seed
         CANFRAME request = {0};
         request.canId = tx_id;
-        request.data_lenght = 3;
+        request.data_length = 8;
         request.buffer[0] = 0x02;
         request.buffer[1] = 0x27;
         request.buffer[2] = level;
+        for(uint8_t i = 3; i < 8; i++) request.buffer[i] = 0xCC;
         
         if(send_can_frame(CAN, &request) != ERROR_OK) continue;
         
@@ -521,10 +524,11 @@ static int32_t allinone_discovery_thread(void* context) {
         
         CANFRAME frame = {0};
         frame.canId = arb_id;
-        frame.data_lenght = 8;
+        frame.data_length = 8;
         frame.buffer[0] = 0x02;
         frame.buffer[1] = 0x10;
         frame.buffer[2] = 0x01;
+        for(uint8_t i = 3; i < 8; i++) frame.buffer[i] = 0xCC;
         
         if(send_can_frame(CAN, &frame) != ERROR_OK) continue;
         
@@ -550,153 +554,145 @@ static int32_t allinone_discovery_thread(void* context) {
         
         if(allinone_ctx.ecu_count >= 16) break;
     }
-    
-    deinit_mcp2515(CAN);
-    free(CAN);
-    
+
     if(allinone_ctx.ecu_count == 0) {
         furi_string_cat_printf(text, "\nNo ECUs found\n");
         text_box_set_text(app->textBox, furi_string_get_cstr(text));
         allinone_context_free(&allinone_ctx);
+        deinit_mcp2515(CAN);
+        free(CAN);
         return 0;
     }
-    
+
     furi_string_cat_printf(text, "\nFound %d ECU(s)\nStarting tests...\n", allinone_ctx.ecu_count);
     text_box_set_text(app->textBox, furi_string_get_cstr(text));
-    
+
     // Create result file
     if(!allinone_create_result_file(&allinone_ctx)) {
         furi_string_cat_printf(text, "Failed to create result file\n");
         text_box_set_text(app->textBox, furi_string_get_cstr(text));
         allinone_context_free(&allinone_ctx);
+        deinit_mcp2515(CAN);
+        free(CAN);
         return 0;
     }
-    
-    allinone_write_header(&allinone_ctx);
-    
-    // Start test thread
-    allinone_ctx.state = AllInOneState_Testing;
-    app->thread = furi_thread_alloc_ex("AllInOneTest", 4 * 1024, allinone_test_thread, app);
-    furi_thread_start(app->thread);
-    
-    return 0;
-}
 
-static int32_t allinone_test_thread(void* context) {
-    App* app = context;
-    FuriString* text = app->text;
-    MCP2515* mcp = app->mcp_can;
-    
-    MCP2515* CAN = mcp_alloc(MCP_NORMAL, mcp->clck, mcp->bitRate);
+    allinone_write_header(&allinone_ctx);
+
+    // Continue testing in this thread instead of spawning a new one
+    allinone_ctx.state = AllInOneState_Testing;
+
+    // Re-init CAN for testing phase (reinit, no free+realloc)
     if(mcp2515_init(CAN) != ERROR_OK) {
         furi_string_cat_printf(text, "Device disconnected during test\n");
         text_box_set_text(app->textBox, furi_string_get_cstr(text));
         allinone_close_result_file(&allinone_ctx);
         allinone_context_free(&allinone_ctx);
+        deinit_mcp2515(CAN);
         free(CAN);
         return 0;
     }
-    
+
     init_mask(CAN, 0, 0);
     init_mask(CAN, 1, 0);
-    
+
     // Allocate results
     allinone_ctx.ecu_results = malloc(allinone_ctx.ecu_count * sizeof(ECUTestResult));
-    
+
     // Test each ECU
     for(uint8_t ecu_idx = 0; ecu_idx < allinone_ctx.ecu_count; ecu_idx++) {
         allinone_ctx.current_ecu_index = ecu_idx;
         ECUInfo* ecu = &allinone_ctx.found_ecus[ecu_idx];
         ECUTestResult* result = &allinone_ctx.ecu_results[ecu_idx];
-        
+
         result->ecu = *ecu;
         result->session_count = 0;
-        
+
         furi_string_cat_printf(text, "\nTesting ECU %d/%d\nTX:0x%03lX RX:0x%03lX\n",
             ecu_idx + 1, allinone_ctx.ecu_count, ecu->tx_id, ecu->rx_id);
         text_box_set_text(app->textBox, furi_string_get_cstr(text));
-        
+
         allinone_write_ecu_header(&allinone_ctx, ecu);
-        
+
         // Test each session
-        SessionType sessions[] = {SessionType_Default, SessionType_Programming, 
+        SessionType sessions[] = {SessionType_Default, SessionType_Programming,
                                    SessionType_Extended, SessionType_Safety};
-        
+
         for(uint8_t s = 0; s < 4; s++) {
             if(!furi_hal_gpio_read(&gpio_button_back)) break;
-            
+
             allinone_ctx.current_session_index = s;
             SessionType session = sessions[s];
             SessionTestResult* session_result = &result->sessions[s];
             session_result->session_type = session;
-            
+
             furi_string_cat_printf(text, "  Session 0x%02X...\n", session);
             text_box_set_text(app->textBox, furi_string_get_cstr(text));
-            
+
             // Set session
             session_result->session_set_success = set_diagnostic_session(CAN, ecu->tx_id, ecu->rx_id, session);
-            
+
             if(!session_result->session_set_success) {
                 furi_string_cat_printf(text, "    Failed to set session\n");
                 text_box_set_text(app->textBox, furi_string_get_cstr(text));
                 continue;
             }
-            
+
             result->session_count++;
-            
+
             allinone_write_session_header(&allinone_ctx, session);
-            
+
             // Start keepalive
             start_keepalive(app, session);
-            
+
             // Scan DIDs
             furi_string_cat_printf(text, "    Scanning DIDs...\n");
             text_box_set_text(app->textBox, furi_string_get_cstr(text));
-            
-            session_result->found_dids = scan_dids(CAN, ecu->tx_id, ecu->rx_id, 
+
+            session_result->found_dids = scan_dids(CAN, ecu->tx_id, ecu->rx_id,
                                                     &session_result->found_did_count);
-            
+
             furi_string_cat_printf(text, "    Found %d DIDs\n", session_result->found_did_count);
             text_box_set_text(app->textBox, furi_string_get_cstr(text));
-            
-            allinone_write_did_results(&allinone_ctx, session_result->found_dids, 
+
+            allinone_write_did_results(&allinone_ctx, session_result->found_dids,
                                         session_result->found_did_count);
-            
+
             // Test security levels
             furi_string_cat_printf(text, "    Testing security levels...\n");
             text_box_set_text(app->textBox, furi_string_get_cstr(text));
-            
+
             test_security_levels(CAN, ecu->tx_id, ecu->rx_id,
                                 session_result->security_levels,
                                 &session_result->security_level_count);
-            
+
             furi_string_cat_printf(text, "    Tested %d levels\n", session_result->security_level_count);
             text_box_set_text(app->textBox, furi_string_get_cstr(text));
-            
+
             allinone_write_security_results(&allinone_ctx, session_result->security_levels,
                                             session_result->security_level_count);
-            
+
             // Stop keepalive
             stop_keepalive();
-            
+
             furi_delay_ms(100);
         }
-        
+
         if(!furi_hal_gpio_read(&gpio_button_back)) break;
     }
-    
+
     deinit_mcp2515(CAN);
     free(CAN);
-    
+
     allinone_write_footer(&allinone_ctx);
     allinone_close_result_file(&allinone_ctx);
-    
-    furi_string_cat_printf(text, "\n=== Test Complete ===\nResults saved to:\n%s\n", 
+
+    furi_string_cat_printf(text, "\n=== Test Complete ===\nResults saved to:\n%s\n",
         allinone_ctx.result_file_path);
     text_box_set_text(app->textBox, furi_string_get_cstr(text));
-    
+
     allinone_ctx.state = AllInOneState_Complete;
-    
+
     return 0;
 }
 
@@ -809,12 +805,13 @@ bool app_scene_uds_allinone_run_on_event(void* context, SceneManagerEvent event)
 
 void app_scene_uds_allinone_run_on_exit(void* context) {
     App* app = context;
-    
-    if(allinone_ctx.state == AllInOneState_Testing && app->thread) {
+
+    if(app->thread) {
         furi_thread_join(app->thread);
         furi_thread_free(app->thread);
+        app->thread = NULL;
     }
-    
+
     stop_keepalive();
     allinone_context_free(&allinone_ctx);
     text_box_reset(app->textBox);

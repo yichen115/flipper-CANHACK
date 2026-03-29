@@ -57,7 +57,7 @@ bool pid_init(OBDII* obdii) {
     init_filter(obdii->CAN, 5, 0x7E8);
 
     obdii->frame_to_send.canId = ECU_REQUEST_ID;
-    obdii->frame_to_send.data_lenght = 8;
+    obdii->frame_to_send.data_length = 8;
 
     for(uint8_t i = 0; i < 8; i++) {
         obdii->frame_to_send.buffer[i] = 0;

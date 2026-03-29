@@ -1,5 +1,9 @@
 #include "../../app_user.h"
 
+#define DID_SCAN_DELAY_MS       20   // Delay between each DID probe
+#define DID_KEEPALIVE_INTERVAL  100  // Send TesterPresent every N iterations
+#define DID_PROGRESS_INTERVAL   64   // Update progress display every N iterations
+
 typedef enum {
     DidRangeIdentification,
     DidRangeCommon,
@@ -150,14 +154,32 @@ static int32_t uds_did_scan_thread(void* context) {
 
         scanned++;
 
+        // Inter-request delay to avoid overwhelming the ECU
+        furi_delay_ms(DID_SCAN_DELAY_MS);
+
+        // Periodic TesterPresent to maintain session
+        if(scanned % DID_KEEPALIVE_INTERVAL == 0) {
+            uds_tester_present(uds);
+            furi_delay_ms(10);
+        }
+
+        // Show progress for large scans
+        if(scanned % DID_PROGRESS_INTERVAL == 0 && total > 256) {
+            uint8_t pct = (uint8_t)((scanned * 100) / total);
+            furi_string_cat_printf(text, "[%u%%] 0x%04X...\n", pct, (uint16_t)did);
+            text_box_set_text(app->textBox, furi_string_get_cstr(text));
+        }
+
         // Send Read DID request directly (0x22 DID_H DID_L)
         CANFRAME request = {0};
         request.canId = uds->id_to_send;
-        request.data_lenght = 4;
+        request.data_length = 8;
         request.buffer[0] = 0x03;  // PCI - single frame, 3 bytes
         request.buffer[1] = 0x22;  // Service: Read DID
         request.buffer[2] = (uint8_t)(did >> 8);  // DID High byte
         request.buffer[3] = (uint8_t)(did & 0xFF); // DID Low byte
+        // Pad remaining bytes
+        for(uint8_t i = 4; i < 8; i++) request.buffer[i] = 0xCC;
 
         if(send_can_frame(uds->CAN, &request) != ERROR_OK) continue;
 
@@ -204,7 +226,7 @@ static int32_t uds_did_scan_thread(void* context) {
                 uint8_t show_bytes = data_len - 3;  // Subtract PCI + Service + DID(2 bytes)
                 if(show_bytes > 4) show_bytes = 4;  // Max 4 bytes in single frame
                 
-                for(uint8_t i = 0; i < show_bytes && (4 + i) < response.data_lenght; i++) {
+                for(uint8_t i = 0; i < show_bytes && (4 + i) < response.data_length; i++) {
                     furi_string_cat_printf(text, "%02X", response.buffer[4 + i]);
                 }
             }
@@ -222,11 +244,6 @@ static int32_t uds_did_scan_thread(void* context) {
         
         furi_string_cat_printf(text, "\n");
         text_box_set_text(app->textBox, furi_string_get_cstr(text));
-
-        if(scanned % 64 == 0) {
-            uint8_t pct = (uint8_t)((scanned * 100) / total);
-            UNUSED(pct);
-        }
     }
 
     if(found_count == 0) {

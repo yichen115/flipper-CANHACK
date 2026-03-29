@@ -28,6 +28,10 @@ void basic_scenes_menu_callback(void* context, uint32_t index) {
         scene_manager_handle_custom_event(app->scene_manager, UDSOptionEvent);
         break;
 
+    case TeslaFSDOption:
+        scene_manager_handle_custom_event(app->scene_manager, TeslaFSDOptionEvent);
+        break;
+
     case SettingsOption:
         scene_manager_handle_custom_event(app->scene_manager, SettingsOptionEvent);
         break;
@@ -62,6 +66,8 @@ void app_scene_menu_on_enter(void* context) {
 
     submenu_add_item(app->submenu, "UDS Services", UDSOption, basic_scenes_menu_callback, app);
 
+    submenu_add_item(app->submenu, "Tesla FSD", TeslaFSDOption, basic_scenes_menu_callback, app);
+
     submenu_add_item(app->submenu, "Settings", SettingsOption, basic_scenes_menu_callback, app);
 
     submenu_set_selected_item(app->submenu, menu_selector);
@@ -94,6 +100,11 @@ bool app_scene_menu_on_event(void* context, SceneManagerEvent event) {
 
         case UDSOptionEvent:
             scene_manager_next_scene(app->scene_manager, app_scene_uds_menu_option);
+            consumed = true;
+            break;
+
+        case TeslaFSDOptionEvent:
+            scene_manager_next_scene(app->scene_manager, app_scene_tesla_fsd_menu_option);
             consumed = true;
             break;
 

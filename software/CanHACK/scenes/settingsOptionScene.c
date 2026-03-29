@@ -31,7 +31,7 @@ void callback_options(VariableItem* item) {
         app->mcp_can->bitRate = index;
         break;
 
-    case CristyalClkOption:
+    case CrystalClkOption:
         variable_item_set_current_value_text(item, clockValues[index]);
         currentClock = index;
         app->mcp_can->clck = index;

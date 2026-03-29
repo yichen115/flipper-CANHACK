@@ -153,6 +153,10 @@ static int32_t uds_security_seed_scan_thread(void* context) {
     for(uint8_t level = 0x01; level <= 0x41; level += 2) {
         if(!furi_hal_gpio_read(&gpio_button_back)) break;
 
+        // Maintain session with TesterPresent before re-setting session
+        uds_tester_present(uds);
+        furi_delay_ms(20);
+
         uds_set_diagnostic_session(uds, EXTENDED_UDS_SESSION);
         furi_delay_ms(50);
 
@@ -224,6 +228,10 @@ static int32_t uds_security_seed_dump_thread(void* context) {
     uint32_t capture_count = 0;
 
     while(furi_hal_gpio_read(&gpio_button_back)) {
+        // Maintain session with TesterPresent
+        uds_tester_present(uds);
+        furi_delay_ms(20);
+
         uds_set_diagnostic_session(uds, EXTENDED_UDS_SESSION);
         furi_delay_ms(100);
 

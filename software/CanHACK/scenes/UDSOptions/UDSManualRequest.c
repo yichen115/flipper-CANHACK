@@ -314,7 +314,7 @@ static int32_t uds_multiframe_request_thread(void* context) {
                 if(canframes_to_send[i].canId != uds_service->id_to_send) break;
 
                 furi_string_cat_printf(text, "->%lx  ", canframes_to_send[i].canId);
-                for(uint8_t j = 0; j < canframes_to_send[i].data_lenght; j++) {
+                for(uint8_t j = 0; j < canframes_to_send[i].data_length; j++) {
                     furi_string_cat_printf(text, "%x ", canframes_to_send[i].buffer[j]);
                 }
 
@@ -324,7 +324,7 @@ static int32_t uds_multiframe_request_thread(void* context) {
             for(uint8_t i = 0; i < count_of_frames; i++) {
                 if(canframes_to_received[i].canId != uds_service->id_to_received) break;
                 furi_string_cat_printf(text, "<-%lx  ", canframes_to_received[i].canId);
-                for(uint8_t j = 0; j < canframes_to_received[i].data_lenght; j++) {
+                for(uint8_t j = 0; j < canframes_to_received[i].data_length; j++) {
                     furi_string_cat_printf(text, "%x ", canframes_to_received[i].buffer[j]);
                 }
 

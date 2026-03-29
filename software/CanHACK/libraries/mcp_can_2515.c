@@ -6,7 +6,7 @@ static bool read_register(FuriHalSpiBusHandle* spi, uint8_t address, uint8_t* da
     uint8_t instruction[] = {INSTRUCTION_READ, address};
     furi_hal_spi_acquire(spi);
     furi_hal_spi_bus_tx(spi, instruction, sizeof(instruction), TIMEOUT_SPI);
-    furi_hal_spi_bus_rx(spi, data, sizeof(data), TIMEOUT_SPI);
+    furi_hal_spi_bus_rx(spi, data, 1, TIMEOUT_SPI);
 
     furi_hal_spi_release(spi);
     return ret;
@@ -50,7 +50,7 @@ bool mcp_get_status(FuriHalSpiBusHandle* spi, uint8_t* data) {
     furi_hal_spi_acquire(spi);
     ret =
         (furi_hal_spi_bus_tx(spi, buff, sizeof(buff), TIMEOUT_SPI) &&
-         furi_hal_spi_bus_rx(spi, data, sizeof(data), TIMEOUT_SPI));
+         furi_hal_spi_bus_rx(spi, data, 1, TIMEOUT_SPI));
     furi_hal_spi_release(spi);
     return ret;
 }
@@ -112,12 +112,17 @@ bool set_new_mode(MCP2515* mcp_can, MCP_MODE new_mode) {
             modify_register(spi, MCP_CANINTE, MCP_WAKIF, MCP_WAKIF);
         }
 
-        if(get_mode(spi) != MCP_LISTENONLY) {
-            return false;
+        // Trigger wake by modifying CANINTF
+        modify_register(spi, MCP_CANINTF, MCP_WAKIF, MCP_WAKIF);
+
+        // Wait for mode to exit sleep
+        uint32_t wake_timeout = furi_get_tick();
+        while(get_mode(spi) == MCP_SLEEP && (furi_get_tick() - wake_timeout) < 50) {
+            furi_delay_us(100);
         }
 
         if(!wake_up_enabled) {
-            modify_register(spi, MCP_CANINTE, MCP_WAKIF, 1);
+            modify_register(spi, MCP_CANINTE, MCP_WAKIF, 0);
         }
 
         modify_register(spi, MCP_CANINTF, MCP_WAKIF, 0);
@@ -435,8 +440,8 @@ uint8_t read_rx_tx_status(FuriHalSpiBusHandle* spi) {
 
     ret &= (MCP_STAT_TXIF_MASK | MCP_STAT_RXIF_MASK);
 
-    ret = (ret & MCP_STAT_TX0IF ? MCP_TX0IF : 0) | (ret & MCP_STAT_TX0IF ? MCP_TX1IF : 0) |
-          (ret & MCP_STAT_TX0IF ? MCP_TX2IF : 0) | (ret & MCP_STAT_RXIF_MASK);
+    ret = (ret & MCP_STAT_TX0IF ? MCP_TX0IF : 0) | (ret & MCP_STAT_TX1IF ? MCP_TX1IF : 0) |
+          (ret & MCP_STAT_TX2IF ? MCP_TX2IF : 0) | (ret & MCP_STAT_RXIF_MASK);
 
     return ret;
 }
@@ -465,10 +470,10 @@ void read_frame(FuriHalSpiBusHandle* spi, CANFRAME* frame, uint8_t read_instruct
 
     furi_hal_spi_bus_rx(spi, &data_ctrl, 1, TIMEOUT);
 
-    frame->data_lenght = data_ctrl & MCP_DLC_MASK;
+    frame->data_length = data_ctrl & MCP_DLC_MASK;
     frame->req = (data_ctrl & MCP_RTR_MASK) ? 1 : 0;
 
-    for(uint8_t i = 0; i < frame->data_lenght; i++) {
+    for(uint8_t i = 0; i < frame->data_length; i++) {
         furi_hal_spi_bus_rx(spi, &frame->buffer[i], 1, TIMEOUT);
     }
 
@@ -577,16 +582,16 @@ void write_id(FuriHalSpiBusHandle* spi, uint8_t address, CANFRAME* frame) {
 
 // write the data lenght in it respective register
 void write_dlc_register(FuriHalSpiBusHandle* spi, uint8_t address, CANFRAME* frame) {
-    uint8_t data_lenght = frame->data_lenght;
+    uint8_t data_length = frame->data_length;
     uint8_t request = frame->req;
 
-    if(request == 1) data_lenght |= MCP_RTR_MASK;
-    set_register(spi, address + 4, data_lenght);
+    if(request == 1) data_length |= MCP_RTR_MASK;
+    set_register(spi, address + 4, data_length);
 }
 
 // write data in the registers
 void write_buffer(FuriHalSpiBusHandle* spi, uint8_t address, CANFRAME* frame) {
-    uint8_t data_lenght = frame->data_lenght;
+    uint8_t data_length = frame->data_length;
 
     address = address + 5;
 
@@ -595,7 +600,7 @@ void write_buffer(FuriHalSpiBusHandle* spi, uint8_t address, CANFRAME* frame) {
     furi_hal_spi_acquire(spi);
     furi_hal_spi_bus_tx(spi, instruction, sizeof(instruction), TIMEOUT_SPI);
 
-    for(uint8_t i = 0; i < data_lenght; i++) {
+    for(uint8_t i = 0; i < data_length; i++) {
         furi_hal_spi_bus_tx(spi, &frame->buffer[i], 1, TIMEOUT_SPI);
     }
 
@@ -627,11 +632,11 @@ ERROR_CAN send_can_message(FuriHalSpiBusHandle* spi, CANFRAME* frame, uint8_t tx
     static CANFRAME auxiliar_frame;
     memset(&auxiliar_frame, 0, sizeof(CANFRAME));
     auxiliar_frame.canId = frame->canId;
-    auxiliar_frame.data_lenght = frame->data_lenght;
+    auxiliar_frame.data_length = frame->data_length;
     auxiliar_frame.ext = frame->ext;
     auxiliar_frame.req = frame->req;
 
-    for(uint8_t i = 0; i < auxiliar_frame.data_lenght; i++) {
+    for(uint8_t i = 0; i < auxiliar_frame.data_length; i++) {
         auxiliar_frame.buffer[i] = frame->buffer[i];
     }
 

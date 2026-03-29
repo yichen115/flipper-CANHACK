@@ -1,8 +1,5 @@
 #include "../../app_user.h"
 
-#define BF_LOCKOUT_WAIT_MS   11000
-#define BF_MAX_LOCKOUT_RETRY 3
-
 // Security access key algorithms
 // Order matters: algorithms are tried in this order
 #define ALGO_BITWISE_NOT        0   // First: simple NOT
@@ -61,18 +58,32 @@ static void calculate_key(const uint8_t* seed, uint8_t len, uint16_t algo, uint8
 // Check if algorithm is valid for given seed length
 static bool is_algo_valid(uint8_t seed_len, uint16_t algo) {
     if(algo == ALGO_BITWISE_NOT) {
-        return true;  // Works for any length
+        return true;
     } else if(algo >= ALGO_XOR_RANGE_START && algo < ALGO_XOR_RANGE_START + ALGO_XOR_RANGE_COUNT) {
-        return true;  // Works for any length
+        return true;
     } else if(algo == ALGO_LEVEL3_COMPLEX) {
-        return seed_len == 4;  // Requires 4-byte seed
+        return seed_len == 4;
     }
     return false;
 }
 
-/* ---- State ---- */
+/* ---- Configurable Settings ---- */
 
-static uint8_t bf_level = 0x01;
+static const uint8_t bf_levels[] = {0x01, 0x03, 0x05, 0x11, 0x21};
+static const char* bf_level_names[] = {"0x01", "0x03", "0x05", "0x11", "0x21"};
+#define BF_LEVEL_COUNT 5
+
+static uint8_t bf_level_index = 0;        // Index into bf_levels[]
+static uint8_t bf_attempt_delay_idx = 3;  // Index: delay = (idx+1)*50ms, default idx=3 -> 200ms
+static uint8_t bf_lockout_wait_idx = 10;  // Index: wait = (idx+1)s, default idx=10 -> 11s
+static uint8_t bf_max_retries = 3;        // 0-10, default 3
+
+// Derived values
+#define BF_DELAY_STEP_MS    50
+#define BF_DELAY_MAX_IDX    39  // 40 steps: 50ms to 2000ms
+#define BF_LOCKOUT_MAX_IDX  29  // 30 steps: 1s to 30s
+#define BF_RETRY_MAX        10
+
 static uint32_t bf_menu_selector = 0;
 
 static int32_t uds_bruteforce_thread(void* context);
@@ -85,33 +96,105 @@ static void bf_append_hex(FuriString* text, const uint8_t* data, uint8_t len) {
     }
 }
 
-/* ---- Bruteforce Level Menu ---- */
+/* ---- Bruteforce Settings Menu (VariableItemList) ---- */
 
-void bf_menu_callback(void* context, uint32_t index) {
+typedef enum {
+    BfMenuLevel = 0,
+    BfMenuDelay,
+    BfMenuLockoutWait,
+    BfMenuMaxRetries,
+    BfMenuStart,
+} BfMenuItem;
+
+static void bf_setting_changed(VariableItem* item) {
+    App* app = variable_item_get_context(item);
+    uint8_t index = variable_item_get_current_value_index(item);
+    uint8_t selected = variable_item_list_get_selected_item_index(app->varList);
+    FuriString* val_text = furi_string_alloc();
+
+    switch(selected) {
+    case BfMenuLevel:
+        bf_level_index = index;
+        variable_item_set_current_value_text(item, bf_level_names[index]);
+        break;
+
+    case BfMenuDelay:
+        bf_attempt_delay_idx = index;
+        furi_string_printf(val_text, "%lu ms", (uint32_t)(index + 1) * BF_DELAY_STEP_MS);
+        variable_item_set_current_value_text(item, furi_string_get_cstr(val_text));
+        break;
+
+    case BfMenuLockoutWait:
+        bf_lockout_wait_idx = index;
+        furi_string_printf(val_text, "%u s", index + 1);
+        variable_item_set_current_value_text(item, furi_string_get_cstr(val_text));
+        break;
+
+    case BfMenuMaxRetries:
+        bf_max_retries = index;
+        furi_string_printf(val_text, "%u", index);
+        variable_item_set_current_value_text(item, furi_string_get_cstr(val_text));
+        break;
+
+    default:
+        break;
+    }
+
+    furi_string_free(val_text);
+}
+
+static void bf_start_callback(void* context, uint32_t index) {
     App* app = context;
     bf_menu_selector = index;
 
-    static const uint8_t levels[] = {0x01, 0x03, 0x05, 0x11, 0x21};
-    if(index < COUNT_OF(levels)) {
-        bf_level = levels[index];
+    if(index == BfMenuStart) {
+        scene_manager_next_scene(app->scene_manager, app_scene_uds_bruteforce_result_option);
     }
-
-    scene_manager_next_scene(app->scene_manager, app_scene_uds_bruteforce_result_option);
 }
 
 void app_scene_uds_bruteforce_menu_on_enter(void* context) {
     App* app = context;
-    submenu_reset(app->submenu);
-    submenu_set_header(app->submenu, "Key Bruteforce");
+    VariableItem* item;
+    FuriString* val_text = furi_string_alloc();
 
-    submenu_add_item(app->submenu, "Level 0x01", 0, bf_menu_callback, app);
-    submenu_add_item(app->submenu, "Level 0x03", 1, bf_menu_callback, app);
-    submenu_add_item(app->submenu, "Level 0x05", 2, bf_menu_callback, app);
-    submenu_add_item(app->submenu, "Level 0x11", 3, bf_menu_callback, app);
-    submenu_add_item(app->submenu, "Level 0x21", 4, bf_menu_callback, app);
+    variable_item_list_reset(app->varList);
 
-    submenu_set_selected_item(app->submenu, bf_menu_selector);
-    view_dispatcher_switch_to_view(app->view_dispatcher, SubmenuView);
+    // Security Level
+    item = variable_item_list_add(
+        app->varList, "Level", BF_LEVEL_COUNT, bf_setting_changed, app);
+    variable_item_set_current_value_index(item, bf_level_index);
+    variable_item_set_current_value_text(item, bf_level_names[bf_level_index]);
+
+    // Attempt Delay (50ms - 2000ms, step 50ms)
+    item = variable_item_list_add(
+        app->varList, "Attempt Delay", BF_DELAY_MAX_IDX + 1, bf_setting_changed, app);
+    variable_item_set_current_value_index(item, bf_attempt_delay_idx);
+    furi_string_printf(val_text, "%lu ms", (uint32_t)(bf_attempt_delay_idx + 1) * BF_DELAY_STEP_MS);
+    variable_item_set_current_value_text(item, furi_string_get_cstr(val_text));
+
+    // Lockout Wait (1s - 30s)
+    item = variable_item_list_add(
+        app->varList, "Lockout Wait", BF_LOCKOUT_MAX_IDX + 1, bf_setting_changed, app);
+    variable_item_set_current_value_index(item, bf_lockout_wait_idx);
+    furi_string_printf(val_text, "%u s", bf_lockout_wait_idx + 1);
+    variable_item_set_current_value_text(item, furi_string_get_cstr(val_text));
+
+    // Max Retries (0 - 10)
+    item = variable_item_list_add(
+        app->varList, "Max Retries", BF_RETRY_MAX + 1, bf_setting_changed, app);
+    variable_item_set_current_value_index(item, bf_max_retries);
+    furi_string_printf(val_text, "%u", bf_max_retries);
+    variable_item_set_current_value_text(item, furi_string_get_cstr(val_text));
+
+    // Start button
+    variable_item_list_add(app->varList, ">> Start Bruteforce", 0, NULL, app);
+
+    variable_item_list_set_enter_callback(app->varList, bf_start_callback, app);
+    variable_item_list_set_selected_item(app->varList, bf_menu_selector);
+
+    furi_string_free(val_text);
+
+    view_dispatcher_switch_to_view(app->view_dispatcher, VarListView);
 }
 
 bool app_scene_uds_bruteforce_menu_on_event(void* context, SceneManagerEvent event) {
@@ -122,8 +205,7 @@ bool app_scene_uds_bruteforce_menu_on_event(void* context, SceneManagerEvent eve
 
 void app_scene_uds_bruteforce_menu_on_exit(void* context) {
     App* app = context;
-    submenu_reset(app->submenu);
-    // Stop session keepalive
+    variable_item_list_reset(app->varList);
     uds_stop_keepalive();
 }
 
@@ -155,12 +237,36 @@ void app_scene_uds_bruteforce_result_on_exit(void* context) {
 
 /* ---- Bruteforce Worker Thread ---- */
 
+// Send TesterPresent during long waits to keep session alive
+static void bf_keepalive_wait(UDS_SERVICE* uds, uint32_t wait_ms) {
+    const uint32_t keepalive_interval = 2000; // Send TesterPresent every 2s
+    uint32_t elapsed = 0;
+
+    while(elapsed < wait_ms) {
+        uint32_t chunk = wait_ms - elapsed;
+        if(chunk > keepalive_interval) chunk = keepalive_interval;
+
+        furi_delay_ms(chunk);
+        elapsed += chunk;
+
+        if(elapsed < wait_ms) {
+            uds_tester_present(uds);
+        }
+    }
+}
+
 static int32_t uds_bruteforce_thread(void* context) {
     App* app = context;
     MCP2515* mcp = app->mcp_can;
     FuriString* text = app->text;
 
     furi_string_reset(text);
+
+    // Read settings
+    uint8_t bf_level = bf_levels[bf_level_index];
+    uint32_t attempt_delay = (uint32_t)(bf_attempt_delay_idx + 1) * BF_DELAY_STEP_MS;
+    uint32_t lockout_wait = (uint32_t)(bf_lockout_wait_idx + 1) * 1000;
+    uint8_t max_retries = bf_max_retries;
 
     UDS_SERVICE* uds = uds_service_alloc(
         app->uds_send_id, app->uds_received_id, MCP_NORMAL, mcp->clck, mcp->bitRate);
@@ -182,6 +288,9 @@ static int32_t uds_bruteforce_thread(void* context) {
         "TX:0x%lX RX:0x%lX\n",
         app->uds_send_id,
         app->uds_received_id);
+    furi_string_cat_printf(
+        text, "Delay:%lums Lock:%lus Retry:%u\n",
+        attempt_delay, lockout_wait / 1000, max_retries);
     furi_string_cat_printf(text, "%u algorithms to try\n\n", (unsigned)ALGO_COUNT);
     text_box_set_text(app->textBox, furi_string_get_cstr(text));
 
@@ -195,6 +304,9 @@ static int32_t uds_bruteforce_thread(void* context) {
             retry = false;
 
             if(!furi_hal_gpio_read(&gpio_button_back)) goto done;
+
+            /* Configurable delay between attempts */
+            furi_delay_ms(attempt_delay);
 
             /* Step 1: Enter extended session */
             uds_set_diagnostic_session(uds, EXTENDED_UDS_SESSION);
@@ -216,14 +328,16 @@ static int32_t uds_bruteforce_thread(void* context) {
                 uint8_t nrc = seed_resp.buffer[3];
                 if(nrc == UDS_NRC_EXCEEDED_ATTEMPTS || nrc == UDS_NRC_TIME_DELAY_NOT_EXPIRED) {
                     lockout_retries++;
-                    if(lockout_retries > BF_MAX_LOCKOUT_RETRY) {
+                    if(max_retries > 0 && lockout_retries > max_retries) {
                         furi_string_cat_printf(text, "\nECU locked. Abort.\n");
                         text_box_set_text(app->textBox, furi_string_get_cstr(text));
                         goto done;
                     }
-                    furi_string_cat_printf(text, "Lockout! Wait 11s...\n");
+                    furi_string_cat_printf(
+                        text, "Lockout! Wait %lus...\n", lockout_wait / 1000);
                     text_box_set_text(app->textBox, furi_string_get_cstr(text));
-                    furi_delay_ms(BF_LOCKOUT_WAIT_MS);
+                    // Wait with periodic TesterPresent to keep session alive
+                    bf_keepalive_wait(uds, lockout_wait);
                     retry = true;
                     continue;
                 }
@@ -262,7 +376,7 @@ static int32_t uds_bruteforce_thread(void* context) {
 
             /* Step 4: Compute key */
             uint8_t key[UDS_MAX_SEED_KEY_LEN] = {0};
-            
+
             // Skip if algorithm not valid for this seed length
             if(!is_algo_valid(seed_len, algo_idx)) {
                 continue;
@@ -313,14 +427,15 @@ static int32_t uds_bruteforce_thread(void* context) {
                 if(nrc == UDS_NRC_EXCEEDED_ATTEMPTS ||
                    nrc == UDS_NRC_TIME_DELAY_NOT_EXPIRED) {
                     lockout_retries++;
-                    if(lockout_retries > BF_MAX_LOCKOUT_RETRY) {
+                    if(max_retries > 0 && lockout_retries > max_retries) {
                         furi_string_cat_printf(text, "\nECU locked. Abort.\n");
                         text_box_set_text(app->textBox, furi_string_get_cstr(text));
                         goto done;
                     }
-                    furi_string_cat_printf(text, "Lockout! Wait 11s...\n");
+                    furi_string_cat_printf(
+                        text, "Lockout! Wait %lus...\n", lockout_wait / 1000);
                     text_box_set_text(app->textBox, furi_string_get_cstr(text));
-                    furi_delay_ms(BF_LOCKOUT_WAIT_MS);
+                    bf_keepalive_wait(uds, lockout_wait);
                     retry = true;
                     continue;
                 }

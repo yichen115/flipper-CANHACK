@@ -36,53 +36,52 @@ static void keepalive_timer_callback(void* context) {
 
 static void send_tester_present(void* context) {
     App* app = context;
-    
+
     // Create a simple CAN frame for Tester Present (0x3E 0x80)
     // 0x80 = suppressPositiveResponseMessage, ECU will not reply
     CANFRAME frame = {0};
     frame.canId = app->uds_send_id;
-    frame.data_lenght = 3;
+    frame.data_length = 8;
     frame.buffer[0] = 0x02;  // PCI - single frame, 2 bytes
     frame.buffer[1] = 0x3E;  // Service: Tester Present
     frame.buffer[2] = 0x80;  // Sub-function: suppress response
-    
-    // Send without waiting for response
-    MCP2515* CAN = mcp_alloc(MCP_NORMAL, app->mcp_can->clck, app->mcp_can->bitRate);
-    if(mcp2515_init(CAN) == ERROR_OK) {
-        send_can_frame(CAN, &frame);
-        deinit_mcp2515(CAN);
-    }
-    free(CAN);
+    // Pad remaining bytes
+    for(uint8_t i = 3; i < 8; i++) frame.buffer[i] = 0xCC;
+
+    // Use the app's existing MCP2515 instance - SPI acquire/release provides mutual exclusion
+    send_can_frame(app->mcp_can, &frame);
 }
 
 static bool set_diagnostic_session(App* app, uint8_t session_type) {
     CANFRAME frame = {0};
     frame.canId = app->uds_send_id;
-    frame.data_lenght = 3;
+    frame.data_length = 8;
     frame.buffer[0] = 0x02;  // PCI - single frame, 2 bytes
     frame.buffer[1] = 0x10;  // Service: Diagnostic Session Control
     frame.buffer[2] = session_type;  // Session type
-    
+    // Pad remaining bytes
+    for(uint8_t i = 3; i < 8; i++) frame.buffer[i] = 0xCC;
+
     MCP2515* CAN = mcp_alloc(MCP_NORMAL, app->mcp_can->clck, app->mcp_can->bitRate);
     if(mcp2515_init(CAN) != ERROR_OK) {
-        free(CAN);
+        free_mcp2515(CAN);
         return false;
     }
-    
+
     init_mask(CAN, 0, 0);
     init_mask(CAN, 1, 0);
-    
+
     if(send_can_frame(CAN, &frame) != ERROR_OK) {
         deinit_mcp2515(CAN);
         free(CAN);
         return false;
     }
-    
+
     // Wait for response with timeout
     CANFRAME response = {0};
     uint32_t timeout = 0;
     bool success = false;
-    
+
     while(timeout < 10000) {  // 10ms timeout
         if(read_can_message(CAN, &response) == ERROR_OK) {
             if(response.buffer[1] == 0x50) {  // Positive response
@@ -95,10 +94,10 @@ static bool set_diagnostic_session(App* app, uint8_t session_type) {
         furi_delay_us(1);
         timeout++;
     }
-    
+
     deinit_mcp2515(CAN);
     free(CAN);
-    
+
     return success;
 }
 
@@ -168,6 +167,8 @@ void app_scene_uds_session_select_on_exit(void* context) {
 void uds_stop_keepalive(void) {
     if(keepalive_timer != NULL) {
         furi_timer_stop(keepalive_timer);
+        furi_timer_free(keepalive_timer);
+        keepalive_timer = NULL;
     }
     session_active = false;
 }

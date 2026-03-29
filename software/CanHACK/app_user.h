@@ -120,6 +120,7 @@ typedef enum {
     SniffingTestOption,
     SenderOption,
     UDSOption,
+    TeslaFSDOption,
     SettingsOption,
 } MainMenuOptions;
 
@@ -129,12 +130,13 @@ typedef enum {
     SenderOptionEvent,
     SettingsOptionEvent,
     UDSOptionEvent,
+    TeslaFSDOptionEvent,
 } MainMenuEvents;
 
 // This is for the Setting Options
 typedef enum {
     BitrateOption,
-    CristyalClkOption,
+    CrystalClkOption,
     SaveLogsOption,
     WiringOption
 } OptionSettings;
@@ -142,7 +144,7 @@ typedef enum {
 // These are the events on the settings menu
 typedef enum {
     BitrateOptionEvent,
-    CristyalClkOptionEvent,
+    CrystalClkOptionEvent,
     WiringOptionEvent
 } SettingsMenuEvent;
 
