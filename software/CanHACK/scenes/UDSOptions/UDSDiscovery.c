@@ -3,7 +3,7 @@
 #define DISCOVERY_TIMEOUT_US 15000
 
 // Default values if not set
-#define DEFAULT_SCAN_MIN 0x600
+#define DEFAULT_SCAN_MIN 0x700
 #define DEFAULT_SCAN_MAX 0x7FF
 
 static int32_t uds_discovery_thread(void* context);

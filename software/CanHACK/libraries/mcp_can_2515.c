@@ -5,9 +5,8 @@ static bool read_register(FuriHalSpiBusHandle* spi, uint8_t address, uint8_t* da
     bool ret = true;
     uint8_t instruction[] = {INSTRUCTION_READ, address};
     furi_hal_spi_acquire(spi);
-    furi_hal_spi_bus_tx(spi, instruction, sizeof(instruction), TIMEOUT_SPI);
-    furi_hal_spi_bus_rx(spi, data, 1, TIMEOUT_SPI);
-
+    ret = furi_hal_spi_bus_tx(spi, instruction, sizeof(instruction), TIMEOUT_SPI);
+    ret = ret && furi_hal_spi_bus_rx(spi, data, 1, TIMEOUT_SPI);
     furi_hal_spi_release(spi);
     return ret;
 }
@@ -101,7 +100,7 @@ bool set_new_mode(MCP2515* mcp_can, MCP_MODE new_mode) {
     uint8_t read_status = 0;
     bool ret = false;
 
-    if(get_mode(spi) == new_mode) return false;
+    if(get_mode(spi) == new_mode) return true;
 
     if((get_mode(spi) == MCP_SLEEP) && new_mode != MCP_SLEEP) {
         uint8_t wake_up_enabled = 0;
@@ -757,6 +756,8 @@ ERROR_CAN mcp2515_start(MCP2515* mcp_can) {
     bool ret = true;
 
     mcp_reset(mcp_can->spi);
+
+    furi_delay_ms(10);
 
     set_new_mode(mcp_can, MODE_CONFIG);
 
