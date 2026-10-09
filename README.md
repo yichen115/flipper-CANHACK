@@ -12,6 +12,13 @@
 
 ![仿真](./img/仿真.png)
 
+```
+hardware 文件夹为硬件电路实现
+software 文件夹 CanHACK 为 Flipper CANHACK APP 代码
+		cluster_demo 为演示环境源码，双击 run_demo.bat 自动打开浏览器
+		parse_allinone_report.py 是解析报告的脚本
+```
+
 
 
 参考：
