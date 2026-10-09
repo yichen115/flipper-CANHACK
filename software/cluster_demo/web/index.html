@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#eef2f1" />
+    <title>CANHACK 驾驶演示</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark"><i data-lucide="car-front"></i></span>
+          <span class="brand-name">CANHACK</span>
+          <span class="brand-divider"></span>
+          <span class="brand-context">驾驶仿真</span>
+        </div>
+        <div class="header-actions">
+          <button class="icon-button fullscreen-button" id="fullscreen" type="button" title="全屏" aria-label="全屏">
+            <i data-lucide="maximize"></i>
+          </button>
+          <button class="icon-button settings-button" id="openSettings" type="button" aria-label="设置" title="设置" aria-haspopup="dialog"><i data-lucide="settings"></i></button>
+        </div>
+      </header>
+
+      <nav class="mobile-tabs" aria-label="页面视图">
+        <button class="mobile-tab" data-view="controls">操控</button>
+        <button class="mobile-tab active" data-view="scene">驾驶</button>
+        <button class="mobile-tab" data-view="logs">总线</button>
+      </nav>
+
+      <main class="workspace">
+        <aside class="control-panel" id="controlsPane">
+          <div class="panel-heading">
+            <span>驾驶控制</span>
+            <span class="panel-overline">INPUT</span>
+          </div>
+
+          <section class="control-section doors-section">
+            <div class="section-heading"><i data-lucide="car"></i><h2>车门</h2></div>
+            <div class="door-grid">
+              <button class="door-control" data-door="0" type="button"><i data-lucide="lock-keyhole"></i><span>左前</span><b>上锁</b></button>
+              <button class="door-control" data-door="1" type="button"><i data-lucide="lock-keyhole"></i><span>右前</span><b>上锁</b></button>
+              <button class="door-control" data-door="2" type="button"><i data-lucide="lock-keyhole"></i><span>左后</span><b>上锁</b></button>
+              <button class="door-control" data-door="3" type="button"><i data-lucide="lock-keyhole"></i><span>右后</span><b>上锁</b></button>
+            </div>
+            <div class="button-pair">
+              <button class="quiet-button" id="unlockAll" type="button"><i data-lucide="lock-keyhole-open"></i>全部解锁</button>
+              <button class="quiet-button" id="lockAll" type="button"><i data-lucide="lock-keyhole"></i>全部上锁</button>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <div class="section-heading"><i data-lucide="move-horizontal"></i><h2>转向灯</h2></div>
+            <div class="signal-group" role="group" aria-label="转向灯控制">
+              <button data-signal="left" type="button"><i data-lucide="arrow-left"></i><span>左转</span></button>
+              <button data-signal="right" type="button"><i data-lucide="arrow-right"></i><span>右转</span></button>
+              <button data-signal="hazard" type="button"><i data-lucide="triangle-alert"></i><span>双闪</span></button>
+              <button data-signal="off" type="button"><i data-lucide="circle-slash"></i><span>关闭</span></button>
+            </div>
+          </section>
+
+          <section class="control-section speed-section">
+            <div class="section-heading"><i data-lucide="gauge"></i><h2>车速</h2></div>
+            <div class="speed-value"><span>目标</span><strong id="targetSpeed">0</strong><small>km/h</small></div>
+            <input id="speedSlider" type="range" min="0" max="140" value="0" aria-label="目标车速" />
+            <div class="speed-scale"><span>0</span><span>70</span><span>140 km/h</span></div>
+            <div class="pedal-row">
+              <button class="pedal-button" id="accelerate" type="button"><i data-lucide="arrow-up"></i><span>加速</span><kbd>W</kbd></button>
+              <button class="pedal-button" id="brake" type="button"><i data-lucide="arrow-down"></i><span>制动</span><kbd>S</kbd></button>
+            </div>
+          </section>
+
+
+          <div class="control-footer"><span class="key-hint"><kbd>1–4</kbd>车门</span><span class="key-hint"><kbd>Q</kbd><kbd>E</kbd>转向</span><span class="key-hint"><kbd>H</kbd>双闪</span></div>
+        </aside>
+
+        <section class="scene-panel" id="scenePane" aria-label="实时驾驶仿真">
+          <div id="scene-root"></div>
+          <div class="windshield-shade" aria-hidden="true"></div>
+          <div class="cabin-pillar cabin-pillar-left" aria-hidden="true"></div>
+          <div class="cabin-pillar cabin-pillar-right" aria-hidden="true"></div>
+          <img class="cockpit" src="/cockpit.svg" alt="" aria-hidden="true" />
+          <div class="side-mirror side-mirror-left" aria-hidden="true"><div class="mirror-glass" data-mirror="left"></div></div>
+          <div class="side-mirror side-mirror-right" aria-hidden="true"><div class="mirror-glass" data-mirror="right"></div></div>
+          <img class="cabin-vent cabin-vent-left" src="/cabin-vent.svg" alt="" aria-hidden="true" />
+          <img class="cabin-vent cabin-vent-right" src="/cabin-vent.svg" alt="" aria-hidden="true" />
+          <div class="scene-topline">
+            <div class="scene-location"><span>山间公路</span><span class="scene-separator">/</span><span id="sceneMode">待机</span></div>
+            <div class="scene-signal-row">
+              <span class="scene-arrow" id="leftArrow"><i data-lucide="arrow-big-left"></i></span>
+              <span class="scene-arrow" id="rightArrow"><i data-lucide="arrow-big-right"></i></span>
+            </div>
+          </div>
+          <div class="instrument-cluster">
+          <div class="scene-hud">
+            <div class="vehicle-status" id="vehicleDisplay">
+              <div class="cluster-screen-top"><div class="cluster-pages" role="tablist" aria-label="仪表信息"><button id="tpmsTab" type="button" role="tab" aria-selected="true" aria-controls="tirePressure" data-info-page="tpms">胎压</button><button id="journeyTab" type="button" role="tab" aria-selected="false" aria-controls="journeyInformation" tabindex="-1" data-info-page="journey">行程</button></div><time id="clusterClock">--:--</time></div>
+              <div class="cluster-drive-row"><div class="gear-selector" id="gearSelector" data-gear="P"><span>P</span><span>R</span><span>N</span><span>D</span></div><strong id="sceneGear" class="cluster-gear">P</strong></div>
+              <div class="vehicle-information" id="tirePressure" role="tabpanel" aria-labelledby="tpmsTab">
+                <svg class="cluster-car" viewBox="0 0 140 170" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="clusterBody" x1="0" x2="1"><stop stop-color="#465565"/><stop offset=".17" stop-color="#b4c3d0"/><stop offset=".48" stop-color="#dae3e9"/><stop offset=".78" stop-color="#8192a2"/><stop offset="1" stop-color="#384854"/></linearGradient>
+                    <linearGradient id="clusterGlass" x1="0" y1="0" x2=".3" y2="1"><stop stop-color="#536d80"/><stop offset=".5" stop-color="#162634"/><stop offset="1" stop-color="#071018"/></linearGradient>
+                  </defs>
+                  <ellipse cx="70" cy="88" rx="42" ry="77" fill="#000" opacity=".4"/>
+                  <g fill="#0a1016" stroke="#8ca4b7" stroke-width="1.5"><rect data-tire-glyph="fl" x="31" y="42" width="10" height="29" rx="4"/><rect data-tire-glyph="fr" x="99" y="42" width="10" height="29" rx="4"/><rect data-tire-glyph="rl" x="31" y="118" width="10" height="27" rx="4"/><rect data-tire-glyph="rr" x="99" y="118" width="10" height="27" rx="4"/></g>
+                  <path d="M42 19Q70 7 98 19L102 43L100 145Q98 157 70 160Q42 157 40 145L38 43Z" fill="url(#clusterBody)" stroke="#d0dce5" stroke-width="1"/>
+                  <path d="M46 22Q70 14 94 22L92 46Q70 38 48 46Z" fill="#a5b5c4" opacity=".6"/>
+                  <path d="M47 49Q70 40 93 49L87 72H53Z" fill="url(#clusterGlass)" stroke="#edf5ff" stroke-opacity=".5"/>
+                  <path d="M52 77Q70 72 88 77V111H52Z" fill="#617787" stroke="#d4e0e8" stroke-width=".6"/>
+                  <path d="M51 116H89L94 137Q70 145 46 137Z" fill="url(#clusterGlass)" stroke="#bdcbd6" stroke-width=".8"/>
+                  <path d="M44 56L49 76V108L44 126ZM96 56L91 76V108L96 126Z" fill="#172735"/>
+                  <path d="M43 28L54 24M86 24L97 28" stroke="#edfbff" stroke-width="4" stroke-linecap="round"/>
+                  <path d="M44 149L55 152M85 152L96 149" stroke="#e47770" stroke-width="3"/>
+                  <path d="M39 62L32 65V70L39 69M101 62L108 65V70L101 69" fill="#99abb9"/>
+                  <g class="cluster-doors" fill="none" stroke="#8eb7c7" stroke-width="2" stroke-linecap="round">
+                    <path data-car-door="0" d="M39 72L39 102"/><path data-car-door="1" d="M101 72L101 102"/><path data-car-door="2" d="M39 107L40 136"/><path data-car-door="3" d="M101 107L100 136"/>
+                  </g>
+                </svg>
+                <div class="cluster-tire-readings">
+                  <div class="tire-reading tpms-fl" data-tire="fl" role="img" aria-label="左前胎压 2.6 bar，温度 26°C"><span class="tire-position">左前</span><div class="tire-values"><strong data-pressure>2.6</strong><span data-temperature>26°</span></div></div>
+                  <div class="tire-reading tpms-fr" data-tire="fr" role="img" aria-label="右前胎压 2.6 bar，温度 26°C"><span class="tire-position">右前</span><div class="tire-values"><strong data-pressure>2.6</strong><span data-temperature>26°</span></div></div>
+                  <div class="tire-reading tpms-rl" data-tire="rl" role="img" aria-label="左后胎压 2.6 bar，温度 26°C"><span class="tire-position">左后</span><div class="tire-values"><strong data-pressure>2.6</strong><span data-temperature>26°</span></div></div>
+                  <div class="tire-reading tpms-rr" data-tire="rr" role="img" aria-label="右后胎压 2.6 bar，温度 26°C"><span class="tire-position">右后</span><div class="tire-values"><strong data-pressure>2.6</strong><span data-temperature>26°</span></div></div>
+                </div>
+              </div>
+              <div class="cluster-journey" id="journeyInformation" role="tabpanel" aria-labelledby="journeyTab" hidden>
+                <div class="cluster-journey-metric"><span>行驶时间</span><strong id="drivingTime">00:00</strong></div>
+                <div class="cluster-journey-metric"><span>平均车速</span><strong><b id="averageSpeed">0</b><small> km/h</small></strong></div>
+                <div class="cluster-door-states" id="doorStatuses" aria-label="车门锁状态">
+                  <span class="cluster-door-label">门锁</span>
+                  <span data-status-door="0"><b>左前</b><small>已锁</small></span>
+                  <span data-status-door="1"><b>右前</b><small>已锁</small></span>
+                  <span data-status-door="2"><b>左后</b><small>已锁</small></span>
+                  <span data-status-door="3"><b>右后</b><small>已锁</small></span>
+                </div>
+              </div>
+              <div class="cluster-footer">
+                <div class="cluster-normal-footer" id="tpmsUnits"><span class="cluster-trip">TRIP <b id="tripDistance">0.0</b> km</span><span class="cluster-pressure-units" id="pressureUnits">bar · °C</span></div>
+              <div class="tpms-alert" id="tpmsAlert" role="alert" hidden>
+                <svg class="tpms-warning-lamp" viewBox="0 0 64 50" role="img" aria-label="胎压过低警告灯"><g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 6C9 14 6 24 7 32L12 40H52L57 32C58 24 55 14 50 6"/><path d="M13 40V44M21 40V44M29 40V44M37 40V44M45 40V44M51 40V44M32 10V25"/></g><circle cx="32" cy="33" r="2.5" fill="currentColor"/></svg>
+                <strong>胎压过低</strong><span class="brake-status" id="brakeStatus">自动制动中</span>
+              </div>
+              </div>
+            </div>
+            <div class="speed-hud">
+              <img class="speed-dial-face" src="/speed-dial.svg" alt="" aria-hidden="true" />
+              <svg class="speed-pointer" viewBox="0 0 240 240" aria-hidden="true">
+                <defs><linearGradient id="needleFinish" x1="117" y1="0" x2="123" y2="0" gradientUnits="userSpaceOnUse"><stop stop-color="#a92428"/><stop offset=".5" stop-color="#ff7466"/><stop offset="1" stop-color="#c33f3d"/></linearGradient><radialGradient id="needleHub"><stop stop-color="#86919a"/><stop offset=".7" stop-color="#36424c"/><stop offset="1" stop-color="#121921"/></radialGradient></defs>
+                <g id="speedNeedle" transform="rotate(-135 120 120)"><path d="M119 30L123 110L122 133H118L117 110Z" fill="url(#needleFinish)"/><path d="M120 31V105" stroke="#ffa995" stroke-width=".6"/></g>
+                <circle cx="120" cy="120" r="8" fill="url(#needleHub)" stroke="#929ea9" stroke-opacity=".25" />
+              </svg>
+              <div class="speed-number"><strong id="actualSpeed">--</strong><span>km/h</span></div>
+            </div>
+            <div class="rpm-hud" role="group" aria-label="模拟发动机转速">
+              <img class="speed-dial-face" src="/rpm-dial.svg" alt="" aria-hidden="true" />
+              <svg class="speed-pointer" viewBox="0 0 240 240" aria-hidden="true">
+                <defs><linearGradient id="rpmNeedleFinish" x1="117" y1="0" x2="123" y2="0" gradientUnits="userSpaceOnUse"><stop stop-color="#a92428"/><stop offset=".5" stop-color="#ff7466"/><stop offset="1" stop-color="#c33f3d"/></linearGradient><radialGradient id="rpmNeedleHub"><stop stop-color="#86919a"/><stop offset=".7" stop-color="#36424c"/><stop offset="1" stop-color="#121921"/></radialGradient></defs>
+                <g id="rpmNeedle" transform="rotate(-135 120 120)"><path d="M119 30L123 110L122 133H118L117 110Z" fill="url(#rpmNeedleFinish)"/><path d="M120 31V105" stroke="#ffa995" stroke-width=".6"/></g>
+                <circle cx="120" cy="120" r="8" fill="url(#rpmNeedleHub)" stroke="#929ea9" stroke-opacity=".25" />
+              </svg>
+              <div class="speed-number rpm-number"><strong id="engineRpm">0</strong><span>r/min</span></div>
+            </div>
+          </div>
+          </div>
+          <button class="scene-fullscreen" id="sceneFullscreen" type="button" title="场景全屏" aria-label="场景全屏"><i data-lucide="scan"></i></button>
+        </section>
+
+        <aside class="log-panel" id="logsPane">
+          <div class="panel-heading log-heading">
+            <div><span>CAN 总线</span><span class="log-subtitle" id="frameCount">0 帧</span></div>
+            <button class="icon-button clear-button" id="clearLog" type="button" title="清空日志" aria-label="清空日志"><i data-lucide="trash-2"></i></button>
+          </div>
+          <div class="log-columns"><span>时间</span><span>方向</span><span>ID</span><span>数据 / 信号</span></div>
+          <div class="log-list" id="logList" aria-live="polite"></div>
+          <div class="log-footer"><span class="log-indicator"></span><span>监听当前 CAN 通道</span></div>
+        </aside>
+      </main>
+    </div>
+    <dialog class="settings-dialog" id="settingsDialog" aria-labelledby="settingsTitle">
+      <form id="settingsForm">
+        <header class="settings-heading"><div><span class="settings-eyebrow">CANHACK</span><h2 id="settingsTitle">连接与车辆设置</h2></div><button class="icon-button" id="closeSettings" type="button" aria-label="关闭设置"><i data-lucide="x"></i></button></header>
+        <div class="settings-content">
+          <section class="settings-section"><div class="section-heading"><i data-lucide="cable"></i><h2>CAN 总线</h2></div>
+        <div class="connection-tools">
+          <label class="select-wrap" aria-label="CAN 通道">
+            <i data-lucide="cable"></i>
+            <select id="channel">
+              <option>PCAN_USBBUS1</option>
+              <option>PCAN_USBBUS2</option>
+              <option>PCAN_USBBUS3</option>
+              <option>PCAN_USBBUS4</option>
+              <option value="virtual">virtual</option>
+            </select>
+          </label>
+          <label class="select-wrap bitrate-wrap" aria-label="CAN 波特率">
+            <select id="bitrate">
+              <option value="125000">125 kbit/s</option>
+              <option value="250000">250 kbit/s</option>
+              <option value="500000" selected>500 kbit/s</option>
+              <option value="1000000">1 Mbit/s</option>
+            </select>
+          </label>
+          <button class="connect-button" id="connectButton" type="button">连接</button>
+          <span class="connection-state">
+            <span class="state-dot" id="canDot"></span>
+            <span id="canStatus">未连接</span>
+          </span>
+
+        </div>
+
+          </section>
+          <section class="serial-section" aria-label="ESP32 胎压接收">
+            <div class="section-heading"><i data-lucide="cable"></i><h2>胎压接收</h2><span>ESP32</span></div>
+            <div class="serial-port-row">
+              <select id="tpmsPort" aria-label="ESP32 串口"><option value="">选择串口</option></select>
+              <button id="tpmsRefresh" class="icon-button" type="button" title="刷新串口" aria-label="刷新串口"><i data-lucide="refresh-cw"></i></button>
+            </div>
+            <div class="serial-actions"><span id="tpmsSerialStatus" role="status">未连接 · 115200</span><button id="tpmsConnect" type="button" disabled>连接</button></div>
+          </section>
+          <section class="settings-section safety-settings">
+            <div class="section-heading"><i data-lucide="shield-check"></i><h2>低胎压自动制动</h2></div>
+            <label class="threshold-field" for="pressureThreshold"><span>报警阈值</span><span><input id="pressureThreshold" type="number" min="0.5" max="3" step="0.1" value="2.0" required /><span>bar</span></span></label>
+            <p>任一轮胎低于阈值时自动制动。胎压恢复到阈值以上 0.2 bar 后解除，不自动恢复原车速。</p>
+            <p>胎压过低或温度达到 80°C 时，对应轮胎数值标红。高温不触发自动制动。</p>
+          </section>
+          <p class="settings-error" id="settingsError" role="alert" hidden></p>
+        </div>
+        <footer class="settings-footer"><button id="dismissSettings" type="button">关闭</button><button id="saveSettings" type="submit">应用设置</button></footer>
+      </form>
+    </dialog>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

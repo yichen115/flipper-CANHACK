@@ -22,8 +22,7 @@ bool app_scene_uds_tester_present_on_event(void* context, SceneManagerEvent even
 
 void app_scene_uds_tester_present_on_exit(void* context) {
     App* app = context;
-    furi_thread_join(app->thread);
-    furi_thread_free(app->thread);
+    app_uds_stop_worker(app);
     widget_reset(app->widget);
 }
 
@@ -46,7 +45,7 @@ static int32_t uds_tester_present_thread(void* context) {
     uint32_t ok_count = 0;
     uint32_t fail_count = 0;
 
-    while(furi_hal_gpio_read(&gpio_button_back)) {
+    while(!uds_worker_cancelled()) {
         counter++;
         bool ok = uds_tester_present(uds);
 

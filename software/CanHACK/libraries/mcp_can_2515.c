@@ -75,15 +75,7 @@ void read_Id(FuriHalSpiBusHandle* spi, uint8_t addr, uint32_t* id, uint8_t* ext)
 // get actual mode of the MCP2515
 uint8_t get_mode(FuriHalSpiBusHandle* spi) {
     uint8_t data = 0;
-
-    uint8_t instruction[] = {INSTRUCTION_READ, MCP_CANSTAT};
-    furi_hal_spi_acquire(spi);
-    furi_hal_spi_bus_tx(spi, instruction, sizeof(instruction), TIMEOUT_SPI);
-    furi_hal_spi_bus_rx(spi, &data, 1, TIMEOUT_SPI);
-
-    furi_hal_spi_release(spi);
-
-    return data & CANSTAT_OPM;
+    return read_register(spi, MCP_CANSTAT, &data) ? data & CANSTAT_OPM : 0xFF;
 }
 
 // compare if the chip is the same mode
@@ -100,9 +92,11 @@ bool set_new_mode(MCP2515* mcp_can, MCP_MODE new_mode) {
     uint8_t read_status = 0;
     bool ret = false;
 
-    if(get_mode(spi) == new_mode) return true;
+    uint8_t initial_mode = get_mode(spi);
+    if(initial_mode == 0xFF) return false;
+    if(initial_mode == new_mode) return true;
 
-    if((get_mode(spi) == MCP_SLEEP) && new_mode != MCP_SLEEP) {
+    if(initial_mode == MCP_SLEEP && new_mode != MCP_SLEEP) {
         uint8_t wake_up_enabled = 0;
         read_register(spi, MCP_CANINTE, &wake_up_enabled);
         wake_up_enabled &= MCP_WAKIF;
@@ -132,8 +126,8 @@ bool set_new_mode(MCP2515* mcp_can, MCP_MODE new_mode) {
     time_out = furi_get_tick();
 
     do {
-        modify_register(spi, MCP_CANCTRL, CANCTRL_REQOP, MODE_CONFIG);
-        read_register(spi, MCP_CANSTAT, &read_status);
+        if(!modify_register(spi, MCP_CANCTRL, CANCTRL_REQOP, MODE_CONFIG) ||
+           !read_register(spi, MCP_CANSTAT, &read_status)) return false;
 
         read_status &= CANSTAT_OPM;
         if(read_status == MODE_CONFIG) ret = true;
@@ -145,8 +139,8 @@ bool set_new_mode(MCP2515* mcp_can, MCP_MODE new_mode) {
     time_out = furi_get_tick();
 
     do {
-        modify_register(spi, MCP_CANCTRL, CANCTRL_REQOP, new_mode);
-        read_register(spi, MCP_CANSTAT, &read_status);
+        if(!modify_register(spi, MCP_CANCTRL, CANCTRL_REQOP, new_mode) ||
+           !read_register(spi, MCP_CANSTAT, &read_status)) return false;
 
         read_status &= CANSTAT_OPM;
         if(read_status == new_mode) return true;
@@ -195,7 +189,7 @@ bool set_loop_back_mode(MCP2515* mcp_can) {
 }
 
 // To write the mask-filters for the chip
-void write_mf(FuriHalSpiBusHandle* spi, uint8_t address, uint8_t ext, uint32_t id) {
+bool write_mf(FuriHalSpiBusHandle* spi, uint8_t address, uint8_t ext, uint32_t id) {
     uint16_t canId = (uint16_t)(id & 0x0FFFF);
     uint8_t bufData[4];
 
@@ -217,71 +211,38 @@ void write_mf(FuriHalSpiBusHandle* spi, uint8_t address, uint8_t ext, uint32_t i
     uint8_t instruction[] = {INSTRUCTION_WRITE, address};
 
     furi_hal_spi_acquire(spi);
-    furi_hal_spi_bus_tx(spi, instruction, sizeof(instruction), TIMEOUT_SPI);
-
-    furi_hal_spi_bus_tx(spi, bufData, 4, TIMEOUT_SPI);
+    bool ok = furi_hal_spi_bus_tx(spi, instruction, sizeof(instruction), TIMEOUT_SPI) &&
+              furi_hal_spi_bus_tx(spi, bufData, sizeof(bufData), TIMEOUT_SPI);
     furi_hal_spi_release(spi);
+    return ok;
 }
 
 // Init can buffers
-void init_can_buffer(FuriHalSpiBusHandle* spi) {
-    uint8_t a1 = 0, a2 = 0, a3 = 0;
-
-    uint8_t std = 0;
-    uint8_t ext = 1;
-
-    uint32_t ulMask = 0x00, ulFilt = 0x00;
-
-    write_mf(spi, MCP_RXM0SIDH, ext, ulMask);
-
-    write_mf(spi, MCP_RXM1SIDH, ext, ulMask);
-
-    write_mf(spi, MCP_RXF0SIDH, ext, ulFilt);
-
-    write_mf(spi, MCP_RXF1SIDH, std, ulFilt);
-
-    write_mf(spi, MCP_RXF2SIDH, ext, ulFilt);
-
-    write_mf(spi, MCP_RXF3SIDH, std, ulFilt);
-
-    write_mf(spi, MCP_RXF4SIDH, ext, ulFilt);
-
-    write_mf(spi, MCP_RXF5SIDH, std, ulFilt);
-
-    a1 = MCP_TXB0CTRL;
-    a2 = MCP_TXB1CTRL;
-    a3 = MCP_TXB2CTRL;
-
-    for(int i = 0; i < 14; i++) {
-        set_register(spi, a1, 0);
-        set_register(spi, a2, 0);
-        set_register(spi, a3, 0);
-        a1++;
-        a2++;
-        a3++;
+static bool init_can_buffer(FuriHalSpiBusHandle* spi) {
+    const uint8_t address[] = {MCP_RXM0SIDH, MCP_RXM1SIDH, MCP_RXF0SIDH, MCP_RXF1SIDH,
+        MCP_RXF2SIDH, MCP_RXF3SIDH, MCP_RXF4SIDH, MCP_RXF5SIDH};
+    for(size_t i = 0; i < sizeof(address); i++) {
+        if(!write_mf(spi, address[i], i < 3 || !(i & 1), 0)) return false;
     }
+    for(uint8_t i = 0; i < 3; i++) {
+        for(uint8_t offset = 0; offset < 14; offset++) {
+            if(!set_register(spi, MCP_TXB0CTRL + i * 0x10 + offset, 0)) return false;
+        }
+    }
+    return true;
 }
 
 // This function works to set Registers to initialize the MCP2515
-void set_registers_init(FuriHalSpiBusHandle* spi) {
-    set_register(spi, MCP_CANINTE, MCP_RX0IF | MCP_RX1IF);
-
-    set_register(spi, MCP_BFPCTRL, MCP_BxBFS_MASK | MCP_BxBFE_MASK);
-
-    set_register(spi, MCP_TXRTSCTRL, 0x00);
-
-    set_register(spi, MCP_RXB0CTRL, MCP_RXB_BUKT_MASK);
-    set_register(spi, MCP_RXB1CTRL, 0);
-
-    // Part added
-    /*modify_register(
-        spi, MCP_RXB0CTRL, MCP_RXB_RX_MASK | MCP_RXB_BUKT_MASK, MCP_RXB_RX_ANY | MCP_RXB_BUKT_MASK);
-
-    modify_register(spi, MCP_RXB1CTRL, MCP_RXB_RX_MASK, MCP_RXB_RX_ANY);*/
+static bool set_registers_init(FuriHalSpiBusHandle* spi) {
+    return set_register(spi, MCP_CANINTE, MCP_RX0IF | MCP_RX1IF) &&
+           set_register(spi, MCP_BFPCTRL, MCP_BxBFS_MASK | MCP_BxBFE_MASK) &&
+           set_register(spi, MCP_TXRTSCTRL, 0) &&
+           set_register(spi, MCP_RXB0CTRL, MCP_RXB_BUKT_MASK) &&
+           set_register(spi, MCP_RXB1CTRL, 0);
 }
 
 // This function Works to set the Clock and Bitrate of the MCP2515
-void mcp_set_bitrate(FuriHalSpiBusHandle* spi, MCP_BITRATE bitrate, MCP_CLOCK clk) {
+bool mcp_set_bitrate(FuriHalSpiBusHandle* spi, MCP_BITRATE bitrate, MCP_CLOCK clk) {
     uint8_t cfg1 = 0, cfg2 = 0, cfg3 = 0;
 
     switch(clk) {
@@ -360,9 +321,7 @@ void mcp_set_bitrate(FuriHalSpiBusHandle* spi, MCP_BITRATE bitrate, MCP_CLOCK cl
         break;
     }
 
-    set_register(spi, MCP_CNF1, cfg1);
-    set_register(spi, MCP_CNF2, cfg2);
-    set_register(spi, MCP_CNF3, cfg3);
+    return set_register(spi, MCP_CNF1, cfg1) && set_register(spi, MCP_CNF2, cfg2) && set_register(spi, MCP_CNF3, cfg3);
 }
 
 // To set a Mask
@@ -446,57 +405,44 @@ uint8_t read_rx_tx_status(FuriHalSpiBusHandle* spi) {
 }
 
 // The function to read the message
-void read_frame(FuriHalSpiBusHandle* spi, CANFRAME* frame, uint8_t read_instruction) {
-    uint8_t data[4];
-    uint8_t data_ctrl = 0;
-
+static bool read_frame(FuriHalSpiBusHandle* spi, CANFRAME* frame, uint8_t read_instruction) {
+    uint8_t header[5] = {0};
+    CANFRAME result = {0};
     furi_hal_spi_acquire(spi);
-    furi_hal_spi_bus_tx(spi, &read_instruction, 1, TIMEOUT_SPI);
-    furi_hal_spi_bus_rx(spi, data, sizeof(data), TIMEOUT);
-
-    uint32_t id = (data[MCP_SIDH] << 3) + (data[MCP_SIDL] >> 5);
-    uint8_t ext = 0;
-
-    if((data[MCP_SIDL] & MCP_TXB_EXIDE_M) == MCP_TXB_EXIDE_M) {
-        id = (id << 2) + (data[MCP_SIDL] & 0x03);
-        id = (id << 8) + data[MCP_EID8];
-        id = (id << 8) + data[MCP_EID0];
-        ext = 1;
+    bool ok = furi_hal_spi_bus_tx(spi, &read_instruction, 1, TIMEOUT_SPI) &&
+              furi_hal_spi_bus_rx(spi, header, sizeof(header), TIMEOUT_SPI);
+    if(ok) {
+        result.ext = (header[MCP_SIDL] & MCP_TXB_EXIDE_M) != 0;
+        result.canId = ((uint32_t)header[MCP_SIDH] << 3) | (header[MCP_SIDL] >> 5);
+        if(result.ext) {
+            result.canId = (result.canId << 18) | ((uint32_t)(header[MCP_SIDL] & 3) << 16) |
+                           ((uint32_t)header[MCP_EID8] << 8) | header[MCP_EID0];
+        }
+        result.data_length = header[4] & MCP_DLC_MASK;
+        if(result.data_length > MAX_LEN) result.data_length = MAX_LEN;
+        // Standard RTR lives in RXBnSIDL.SRR, extended RTR in RXBnDLC.RTR.
+        result.req = result.ext ? !!(header[4] & MCP_RTR_MASK) : !!(header[MCP_SIDL] & 0x10);
+        if(result.data_length && !result.req) {
+            ok = furi_hal_spi_bus_rx(spi, result.buffer, result.data_length, TIMEOUT_SPI);
+        }
     }
-
-    frame->canId = id;
-    frame->ext = ext;
-
-    furi_hal_spi_bus_rx(spi, &data_ctrl, 1, TIMEOUT);
-
-    frame->data_length = data_ctrl & MCP_DLC_MASK;
-    frame->req = (data_ctrl & MCP_RTR_MASK) ? 1 : 0;
-
-    for(uint8_t i = 0; i < frame->data_length; i++) {
-        furi_hal_spi_bus_rx(spi, &frame->buffer[i], 1, TIMEOUT);
-    }
-
+    // READ RX BUFFER clears RXnIF at CS release. A second clear can discard
+    // a new frame arriving between the two SPI transactions.
     furi_hal_spi_release(spi);
+    if(ok) *frame = result;
+    return ok;
 }
 
 // This function Works to get the Can message
 ERROR_CAN read_can_message(MCP2515* mcp_can, CANFRAME* frame) {
-    ERROR_CAN ret = ERROR_OK;
-    FuriHalSpiBusHandle* spi = mcp_can->spi;
-
+    if(!mcp_can || !mcp_can->spi || !frame) return ERROR_SPI;
     uint8_t status = 0;
-
-    mcp_get_status(spi, &status);
-
-    if(status & MCP_RX0IF) {
-        read_frame(spi, frame, INSTRUCTION_READ_RX0);
-        modify_register(spi, MCP_CANINTF, MCP_RX0IF, 0);
-    } else if(status & MCP_RX1IF) {
-        read_frame(spi, frame, INSTRUCTION_READ_RX1);
-        modify_register(spi, MCP_CANINTF, MCP_RX1IF, 0);
-    } else
-        ret = ERROR_NOMSG;
-    return ret;
+    if(!mcp_get_status(mcp_can->spi, &status)) return ERROR_SPI;
+    uint8_t pending = status & (MCP_RX0IF | MCP_RX1IF);
+    if(!pending) return ERROR_NOMSG;
+    uint8_t selected = pending == 3 ? mcp_can->next_rx : (pending & MCP_RX0IF ? 0 : 1);
+    mcp_can->next_rx = selected ^ 1;
+    return read_frame(mcp_can->spi, frame, selected ? INSTRUCTION_READ_RX1 : INSTRUCTION_READ_RX0) ? ERROR_OK : ERROR_SPI;
 }
 
 // This function return the error in the can bus network
@@ -526,163 +472,75 @@ ERROR_CAN check_error(MCP2515* mcp_can) {
 
 // This function works to get
 ERROR_CAN check_receive(MCP2515* mcp_can) {
-    FuriHalSpiBusHandle* spi = mcp_can->spi;
-
-    uint8_t status = read_rx_tx_status(spi);
-
-    if(status & MCP_RX0IF) {
-        return ERROR_OK;
-    }
-    if(status & MCP_RX1IF) {
-        return ERROR_OK;
-    }
-
-    return ERROR_NOMSG;
+    uint8_t status = 0;
+    if(!mcp_can || !mcp_can->spi || !mcp_get_status(mcp_can->spi, &status)) return ERROR_SPI;
+    return status & (MCP_RX0IF | MCP_RX1IF) ? ERROR_OK : ERROR_NOMSG;
 }
 
-// write the id in the tx register
-void write_id(FuriHalSpiBusHandle* spi, uint8_t address, CANFRAME* frame) {
-    uint32_t can_id = frame->canId;
-
-    if(can_id > (0x7FF)) frame->ext = 1;
-
-    uint8_t extension = frame->ext;
-    uint16_t canid;
-    uint8_t tbufdata[4];
-
-    canid = (uint16_t)(can_id & 0x0FFFF);
-
-    if(extension == 1) {
-        tbufdata[MCP_EID0] = (uint8_t)(canid & 0xFF);
-        tbufdata[MCP_EID8] = (uint8_t)(canid >> 8);
-        canid = (uint16_t)(can_id >> 16);
-        tbufdata[MCP_SIDL] = (uint8_t)(canid & 0x03);
-        tbufdata[MCP_SIDL] += (uint8_t)((canid & 0x1C) << 3);
-        tbufdata[MCP_SIDL] |= MCP_TXB_EXIDE_M;
-        tbufdata[MCP_SIDH] = (uint8_t)(canid >> 5);
-    } else {
-        tbufdata[MCP_SIDH] = (uint8_t)(canid >> 3);
-        tbufdata[MCP_SIDL] = (uint8_t)((canid & 0x07) << 5);
-        tbufdata[MCP_EID0] = 0;
-        tbufdata[MCP_EID8] = 0;
-    }
-
-    uint8_t instruction[] = {INSTRUCTION_WRITE, address};
-
-    furi_hal_spi_acquire(spi);
-    furi_hal_spi_bus_tx(spi, instruction, sizeof(instruction), TIMEOUT_SPI);
-
-    for(uint8_t i = 0; i < 4; i++) {
-        furi_hal_spi_bus_tx(spi, &tbufdata[i], 1, TIMEOUT_SPI);
-    }
-
-    furi_hal_spi_release(spi);
-}
-
-// write the data lenght in it respective register
-void write_dlc_register(FuriHalSpiBusHandle* spi, uint8_t address, CANFRAME* frame) {
-    uint8_t data_length = frame->data_length;
-    uint8_t request = frame->req;
-
-    if(request == 1) data_length |= MCP_RTR_MASK;
-    set_register(spi, address + 4, data_length);
-}
-
-// write data in the registers
-void write_buffer(FuriHalSpiBusHandle* spi, uint8_t address, CANFRAME* frame) {
-    uint8_t data_length = frame->data_length;
-
-    address = address + 5;
-
-    uint8_t instruction[] = {INSTRUCTION_WRITE, address};
-
-    furi_hal_spi_acquire(spi);
-    furi_hal_spi_bus_tx(spi, instruction, sizeof(instruction), TIMEOUT_SPI);
-
-    for(uint8_t i = 0; i < data_length; i++) {
-        furi_hal_spi_bus_tx(spi, &frame->buffer[i], 1, TIMEOUT_SPI);
-    }
-
-    furi_hal_spi_release(spi);
-}
-
-uint8_t get_free_buffer(FuriHalSpiBusHandle* spi) {
-    static uint8_t status = 0;
-    uint8_t instruction = INSTRUCTION_READ_STATUS;
-
-    furi_hal_spi_acquire(spi);
-    furi_hal_spi_bus_tx(spi, &instruction, 1, TIMEOUT_SPI);
-    furi_hal_spi_bus_rx(spi, &status, 1, TIMEOUT_SPI);
-    furi_hal_spi_release(spi);
-
-    uint8_t status_TX0 = status & MCP_STAT_TX0_PENDING;
-    uint8_t status_TX1 = status & MCP_STAT_TX1_PENDING;
-    uint8_t status_TX2 = status & MCP_STAT_TX2_PENDING;
-
-    if(!status_TX0) return MCP_TXB0CTRL;
-    if(!status_TX1) return MCP_TXB1CTRL;
-    if(!status_TX2) return MCP_TXB2CTRL;
-
-    return 0xFF;
-}
-
-// send can message
-ERROR_CAN send_can_message(FuriHalSpiBusHandle* spi, CANFRAME* frame, uint8_t tx_buffer) {
-    static CANFRAME auxiliar_frame;
-    memset(&auxiliar_frame, 0, sizeof(CANFRAME));
-    auxiliar_frame.canId = frame->canId;
-    auxiliar_frame.data_length = frame->data_length;
-    auxiliar_frame.ext = frame->ext;
-    auxiliar_frame.req = frame->req;
-
-    for(uint8_t i = 0; i < auxiliar_frame.data_length; i++) {
-        auxiliar_frame.buffer[i] = frame->buffer[i];
-    }
-
-    ERROR_CAN res = ERROR_FAILTX;
-    uint8_t is_send_it = 0;
-    uint8_t free_buffer = tx_buffer + 1;
-    uint32_t time_waiting = furi_get_tick();
-
-    write_id(spi, free_buffer, &auxiliar_frame);
-
-    write_dlc_register(spi, free_buffer, &auxiliar_frame);
-
-    write_buffer(spi, free_buffer, &auxiliar_frame);
-
-    modify_register(spi, tx_buffer, MCP_TXB_TXREQ_M, MCP_TXB_TXREQ_M);
-
-    time_waiting = furi_get_tick();
-
-    uint8_t instruction[] = {INSTRUCTION_READ, free_buffer - 1};
-
+// TX completion is confirmed by TXnIF, independently of priority/arbitration bits.
+static ERROR_CAN finish_or_abort_tx(FuriHalSpiBusHandle* spi, uint8_t ctrl, uint8_t flag, ERROR_CAN reason) {
+    if(!modify_register(spi, ctrl, MCP_TXB_TXREQ_M, 0)) return ERROR_TX_UNCERTAIN;
+    uint32_t start = furi_get_tick();
     do {
-        furi_hal_spi_acquire(spi);
-
-        furi_hal_spi_bus_tx(spi, instruction, sizeof(instruction), TIMEOUT_SPI);
-        furi_hal_spi_bus_rx(spi, &is_send_it, 1, TIMEOUT_SPI);
-
-        furi_hal_spi_release(spi);
-
-        furi_delay_us(1);
-        if(is_send_it == 0) res = ERROR_OK;
-
-    } while((res != ERROR_OK) && ((furi_get_tick() - time_waiting) < 5));
-
-    if(is_send_it) return res;
-
-    return ERROR_OK;
+        uint8_t state = 0, interrupt = 0;
+        if(!read_register(spi, ctrl, &state) || !read_register(spi, MCP_CANINTF, &interrupt)) return ERROR_TX_UNCERTAIN;
+        if(!(state & MCP_TXB_TXREQ_M)) {
+            if(interrupt & flag) return ERROR_OK; // Completed just before abort.
+            return reason;
+        }
+        furi_delay_us(100);
+    } while(furi_get_tick() - start < 5);
+    return ERROR_TX_UNCERTAIN;
 }
 
-// This function is to sent a can message
 ERROR_CAN send_can_frame(MCP2515* mcp_can, CANFRAME* frame) {
+    if(!mcp_can || !mcp_can->spi || !frame || frame->data_length > 8 ||
+       frame->canId > 0x1FFFFFFF) return ERROR_FAILTX;
     FuriHalSpiBusHandle* spi = mcp_can->spi;
-
-    uint8_t free_buffer = get_free_buffer(spi);
-
-    if(free_buffer == 0xFF) return ERROR_ALLTXBUSY;
-
-    return send_can_message(spi, frame, free_buffer);
+    uint8_t status = 0;
+    if(!mcp_get_status(spi, &status)) return ERROR_SPI;
+    uint8_t index = 0;
+    while(index < 3 && (status & (MCP_STAT_TX0_PENDING << (index * 2)))) index++;
+    if(index == 3) return ERROR_ALLTXBUSY; // Nothing submitted: safe to retry.
+    uint8_t ctrl = MCP_TXB0CTRL + index * 0x10;
+    uint8_t flag = MCP_TX0IF << index;
+    uint8_t packet[15] = {INSTRUCTION_WRITE, ctrl + 1};
+    uint32_t id = frame->canId;
+    if(frame->ext || id > 0x7FF) {
+        packet[2] = id >> 21;
+        packet[3] = ((id >> 13) & 0xE0) | MCP_TXB_EXIDE_M | ((id >> 16) & 3);
+        packet[4] = id >> 8;
+        packet[5] = id;
+    } else {
+        packet[2] = id >> 3;
+        packet[3] = (id & 7) << 5;
+    }
+    packet[6] = frame->data_length | (frame->req ? MCP_RTR_MASK : 0);
+    if(!frame->req) memcpy(packet + 7, frame->buffer, frame->data_length);
+    if(!modify_register(spi, MCP_CANINTF, flag, 0) ||
+       !modify_register(spi, ctrl, MCP_TXB_ABTF_M | MCP_TXB_MLOA_M | MCP_TXB_TXERR_M, 0)) return ERROR_SPI;
+    furi_hal_spi_acquire(spi);
+    bool loaded = furi_hal_spi_bus_tx(spi, packet, 7 + (frame->req ? 0 : frame->data_length), TIMEOUT_SPI);
+    furi_hal_spi_release(spi);
+    if(!loaded) return ERROR_SPI;
+    if(!modify_register(spi, ctrl, MCP_TXB_TXREQ_M, MCP_TXB_TXREQ_M)) {
+        return finish_or_abort_tx(spi, ctrl, flag, ERROR_TX_UNCERTAIN);
+    }
+    uint32_t start = furi_get_tick();
+    do {
+        uint8_t state = 0, interrupt = 0, errors = 0;
+        if(!read_register(spi, ctrl, &state) || !read_register(spi, MCP_CANINTF, &interrupt)) {
+            return finish_or_abort_tx(spi, ctrl, flag, ERROR_TX_UNCERTAIN);
+        }
+        if(!(state & MCP_TXB_TXREQ_M)) {
+            if(interrupt & flag) return ERROR_OK;
+            return ERROR_FAILTX;
+        }
+        if(!read_register(spi, MCP_EFLG, &errors)) return finish_or_abort_tx(spi, ctrl, flag, ERROR_TX_UNCERTAIN);
+        if(errors & MCP_EFLG_TXBO) return finish_or_abort_tx(spi, ctrl, flag, ERROR_BUSOFF);
+        furi_delay_us(100);
+    } while(furi_get_tick() - start < 10);
+    return finish_or_abort_tx(spi, ctrl, flag, ERROR_SEND_MSG_TIMEOUT);
 }
 
 uint8_t read_detection_baudrate(FuriHalSpiBusHandle* spi) {
@@ -729,8 +587,13 @@ ERROR_CAN is_this_bitrate(MCP2515* mcp_can, MCP_BITRATE bitrate) {
 
 // This function works to alloc the struct
 MCP2515* mcp_alloc(MCP_MODE mode, MCP_CLOCK clck, MCP_BITRATE bitrate) {
-    MCP2515* mcp_can = malloc(sizeof(MCP2515));
+    MCP2515* mcp_can = calloc(1, sizeof(MCP2515));
+    if(!mcp_can) return NULL;
     mcp_can->spi = spi_alloc();
+    if(!mcp_can->spi) {
+        free(mcp_can);
+        return NULL;
+    }
     mcp_can->mode = mode;
     mcp_can->bitRate = bitrate;
     mcp_can->clck = clck;
@@ -739,33 +602,38 @@ MCP2515* mcp_alloc(MCP_MODE mode, MCP_CLOCK clck, MCP_BITRATE bitrate) {
 
 // To deinit
 void deinit_mcp2515(MCP2515* mcp_can) {
+    if(!mcp_can || !mcp_can->spi) return;
+    if(!mcp_can->spi_initialized) return;
     mcp_reset(mcp_can->spi);
     furi_hal_spi_bus_handle_deinit(mcp_can->spi);
+    mcp_can->spi_initialized = false;
 }
 
 // free instance
 void free_mcp2515(MCP2515* mcp_can) {
+    if(!mcp_can) return;
+    deinit_mcp2515(mcp_can);
     free(mcp_can->spi);
     free(mcp_can);
 }
 
 // This function starts the SPI communication and set the MCP2515 device
 ERROR_CAN mcp2515_start(MCP2515* mcp_can) {
+    if(!mcp_can || !mcp_can->spi) return ERROR_FAILINIT;
+    if(mcp_can->spi_initialized) deinit_mcp2515(mcp_can);
     furi_hal_spi_bus_handle_init(mcp_can->spi);
+    mcp_can->spi_initialized = true;
+    mcp_can->next_rx = 0;
 
     bool ret = true;
 
-    mcp_reset(mcp_can->spi);
+    if(!mcp_reset(mcp_can->spi)) return ERROR_FAILINIT;
 
     furi_delay_ms(10);
 
-    set_new_mode(mcp_can, MODE_CONFIG);
-
-    mcp_set_bitrate(mcp_can->spi, mcp_can->bitRate, mcp_can->clck);
-
-    init_can_buffer(mcp_can->spi);
-
-    set_registers_init(mcp_can->spi);
+    if(!set_new_mode(mcp_can, MODE_CONFIG) ||
+       !mcp_set_bitrate(mcp_can->spi, mcp_can->bitRate, mcp_can->clck) ||
+       !init_can_buffer(mcp_can->spi) || !set_registers_init(mcp_can->spi)) return ERROR_FAILINIT;
 
     ret = set_new_mode(mcp_can, mcp_can->mode);
     if(!ret) return ERROR_FAILINIT;

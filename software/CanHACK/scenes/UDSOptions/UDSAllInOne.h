@@ -6,9 +6,8 @@
 #include <storage/storage.h>
 #include <datetime/datetime.h>
 
-#define ALLINONE_KEEPALIVE_INTERVAL_MS 2000
 #define ALLINONE_MAX_SECURITY_LEVEL 0x1F
-#define ALLINONE_DID_RANGES_COUNT 4
+#define ALLINONE_DID_RANGES_COUNT 1
 
 typedef enum {
     AllInOneState_Settings,
@@ -65,9 +64,6 @@ typedef struct {
     uint8_t current_ecu_index;
     uint8_t current_session_index;
     AllInOneState state;
-    FuriTimer* keepalive_timer;
-    bool keepalive_running;
-    SessionType current_session;
     Storage* storage;
     File* result_file;
     char result_file_path[128];

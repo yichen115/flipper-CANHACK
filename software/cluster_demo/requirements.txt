@@ -1,0 +1,5 @@
+python-can>=4.2
+can-isotp>=2.0,<3
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pyserial>=3.5

@@ -1,156 +1,114 @@
 #include "../../app_user.h"
 
-#define DISCOVERY_TIMEOUT_US 15000
+#define DISCOVERY_MAX_RESULTS 32
+static struct { uint32_t tx; uint32_t rx; } found[DISCOVERY_MAX_RESULTS];
+static uint16_t found_count;
+static bool result_menu_shown;
 
-// Default values if not set
-#define DEFAULT_SCAN_MIN 0x700
-#define DEFAULT_SCAN_MAX 0x7FF
+static void discovery_select(void* context, uint32_t index) {
+    App* app = context;
+    view_dispatcher_send_custom_event(app->view_dispatcher, index);
+}
 
-static int32_t uds_discovery_thread(void* context);
+static int32_t discovery_worker(void* context) {
+    App* app = context;
+    MCP2515* can = mcp_alloc(MCP_NORMAL, app->mcp_can->clck, app->mcp_can->bitRate);
+    uint32_t min = app->ecu_discovery_start_id;
+    uint32_t max = app->ecu_discovery_end_id;
+    if(min == 0 && max == 0) { min = 0x700; max = 0x7FF; }
+    if(min > 0x7FF) min = 0x7FF;
+    if(max > 0x7FF) max = 0x7FF;
+    if(min > max) { uint32_t temp = min; min = max; max = temp; }
+    furi_string_reset(app->data);
+    furi_string_set(app->text, "Discovery\n");
+    if(!can || mcp2515_init(can) != ERROR_OK) {
+        text_box_set_text(app->textBox, "CAN init failed");
+        free_mcp2515(can);
+        return 0;
+    }
+    init_mask(can, 0, 0);
+    init_mask(can, 1, 0);
+    uint32_t start = furi_get_tick();
+    uint32_t last_update = start - 100;
+    uint32_t scanned = 0;
+    for(uint32_t id = min; id <= max && !uds_worker_cancelled(); id++) {
+        CANFRAME response = {0};
+        if(uds_discovery_probe(can, id, app->uds_discovery_wait_ms, &response) &&
+           uds_discovery_verify(can, id, response.canId, app->uds_discovery_wait_ms)) {
+            found[found_count].tx = id;
+            found[found_count].rx = response.canId;
+            found_count++;
+            furi_string_cat_printf(app->data, "%03lX -> %03lX\n", id, response.canId);
+        }
+        scanned++;
+        uint32_t now = furi_get_tick();
+        if(now - last_update >= 100 || id == max || found_count == DISCOVERY_MAX_RESULTS) {
+            furi_string_printf(app->text,
+                "Discovery %lu/%lu\nWait %lu ms, %lu ms elapsed\nFound %u verified pair(s)\n%s\nBACK: cancel",
+                scanned, max - min + 1, app->uds_discovery_wait_ms, now - start,
+                found_count, furi_string_get_cstr(app->data));
+            text_box_set_text(app->textBox, furi_string_get_cstr(app->text));
+            last_update = now;
+        }
+        if(found_count == DISCOVERY_MAX_RESULTS) break;
+        furi_delay_ms(1);
+    }
+    furi_string_cat_printf(app->text, "\n%s", uds_worker_cancelled() ? "Cancelled" : "Scan complete");
+    if(found_count == DISCOVERY_MAX_RESULTS) furi_string_cat_printf(app->text, " (32 pair limit)");
+    text_box_set_text(app->textBox, furi_string_get_cstr(app->text));
+    deinit_mcp2515(can);
+    free_mcp2515(can);
+    return 0;
+}
 
 void app_scene_uds_ecu_discovery_on_enter(void* context) {
     App* app = context;
+    found_count = 0;
+    result_menu_shown = false;
     text_box_reset(app->textBox);
     text_box_set_focus(app->textBox, TextBoxFocusEnd);
-
-    app->thread = furi_thread_alloc_ex("UdsDisc", 4 * 1024, uds_discovery_thread, app);
-    furi_thread_start(app->thread);
-
+    text_box_set_text(app->textBox, "Discovering ECUs...\nBACK: cancel");
     view_dispatcher_switch_to_view(app->view_dispatcher, TextBoxView);
+    app->thread = furi_thread_alloc_ex("UdsDiscovery", 4096, discovery_worker, app);
+    furi_thread_start(app->thread);
 }
 
 bool app_scene_uds_ecu_discovery_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
+    App* app = context;
+    if(event.type == SceneManagerEventTypeTick && app->thread &&
+       furi_thread_get_state(app->thread) == FuriThreadStateStopped) {
+        app_uds_stop_worker(app);
+        if(found_count) {
+            submenu_reset(app->submenu);
+            submenu_set_header(app->submenu, "Select ECU (TX -> RX)");
+            for(uint16_t i = 0; i < found_count; i++) {
+                char label[32];
+                snprintf(label, sizeof(label), "%03lX -> %03lX", found[i].tx, found[i].rx);
+                submenu_add_item(app->submenu, label, i, discovery_select, app);
+            }
+            submenu_add_item(app->submenu, "Scan report", found_count, discovery_select, app);
+            result_menu_shown = true;
+            view_dispatcher_switch_to_view(app->view_dispatcher, SubmenuView);
+        }
+        return true;
+    }
+    if(event.type == SceneManagerEventTypeCustom && result_menu_shown) {
+        if(event.event < found_count) {
+            app->uds_send_id = found[event.event].tx;
+            app->uds_received_id = found[event.event].rx;
+            app->uds_session_type = 1;
+            scene_manager_search_and_switch_to_previous_scene(app->scene_manager, app_scene_uds_menu_option);
+        } else {
+            view_dispatcher_switch_to_view(app->view_dispatcher, TextBoxView);
+        }
+        return true;
+    }
     return false;
 }
 
 void app_scene_uds_ecu_discovery_on_exit(void* context) {
     App* app = context;
-    furi_thread_join(app->thread);
-    furi_thread_free(app->thread);
+    app_uds_stop_worker(app);
     text_box_reset(app->textBox);
-}
-
-static int32_t uds_discovery_thread(void* context) {
-    App* app = context;
-    FuriString* text = app->text;
-    MCP2515* mcp = app->mcp_can;
-
-    furi_string_reset(text);
-
-    MCP2515* CAN = mcp_alloc(MCP_NORMAL, mcp->clck, mcp->bitRate);
-
-    if(mcp2515_init(CAN) != ERROR_OK) {
-        furi_string_cat_printf(text, "Device not connected\n");
-        text_box_set_text(app->textBox, furi_string_get_cstr(text));
-        free_mcp2515(CAN);
-        return 0;
-    }
-
-    init_mask(CAN, 0, 0);
-    init_mask(CAN, 1, 0);
-
-    // Get scan range from app settings, use defaults if not set
-    uint32_t scan_min = app->ecu_discovery_start_id;
-    uint32_t scan_max = app->ecu_discovery_end_id;
-    
-    furi_string_cat_printf(text, "Raw values: 0x%lX - 0x%lX\n", scan_min, scan_max);
-    
-    // If both are 0, use defaults
-    if(scan_min == 0 && scan_max == 0) {
-        scan_min = DEFAULT_SCAN_MIN;
-        scan_max = DEFAULT_SCAN_MAX;
-        furi_string_cat_printf(text, "Using defaults\n");
-    }
-    
-    // Validate range
-    if(scan_min > scan_max) {
-        uint32_t temp = scan_min;
-        scan_min = scan_max;
-        scan_max = temp;
-    }
-    if(scan_min > 0x7FF) scan_min = 0x7FF;
-    if(scan_max > 0x7FF) scan_max = 0x7FF;
-
-    furi_string_cat_printf(
-        text,
-        "Scanning 0x%03lX-0x%03lX...\n",
-        scan_min,
-        scan_max);
-    text_box_set_text(app->textBox, furi_string_get_cstr(text));
-
-    if(scan_min == 0 && scan_max == 0) {
-        furi_string_cat_printf(text, "Error: Range is 0\n");
-        text_box_set_text(app->textBox, furi_string_get_cstr(text));
-        deinit_mcp2515(CAN);
-        free(CAN);
-        return 0;
-    }
-
-    uint8_t found_count = 0;
-
-    for(uint32_t arb_id = scan_min; arb_id <= scan_max; arb_id++) {
-        if(!furi_hal_gpio_read(&gpio_button_back)) break;
-
-        CANFRAME frame_to_send = {0};
-        frame_to_send.canId = arb_id;
-        frame_to_send.data_length = 8;
-        frame_to_send.buffer[0] = 0x02;
-        frame_to_send.buffer[1] = 0x10;
-        frame_to_send.buffer[2] = 0x01;
-        // Pad remaining bytes
-        for(uint8_t i = 3; i < 8; i++) frame_to_send.buffer[i] = 0xCC;
-
-        if(send_can_frame(CAN, &frame_to_send) != ERROR_OK) continue;
-
-        CANFRAME response = {0};
-        uint32_t timeout = 0;
-        bool got_response = false;
-
-        while(timeout < DISCOVERY_TIMEOUT_US) {
-            if(read_can_message(CAN, &response) == ERROR_OK) {
-                if(response.buffer[1] == 0x50 || response.buffer[1] == 0x7F) {
-                    got_response = true;
-                    break;
-                }
-            }
-            furi_delay_us(1);
-            timeout++;
-        }
-
-        if(got_response) {
-            found_count++;
-            if(response.buffer[1] == 0x50) {
-                furi_string_cat_printf(
-                    text,
-                    "ECU TX:0x%lX RX:0x%lX +\n",
-                    arb_id,
-                    response.canId);
-            } else {
-                uint8_t nrc = response.buffer[3];
-                furi_string_cat_printf(
-                    text,
-                    "ECU TX:0x%lX RX:0x%lX\n  NRC:0x%02X %s\n",
-                    arb_id,
-                    response.canId,
-                    nrc,
-                    uds_get_nrc_name(nrc));
-            }
-            text_box_set_text(app->textBox, furi_string_get_cstr(text));
-        }
-    }
-
-    if(found_count == 0) {
-        furi_string_cat_printf(text, "\nNo ECU found\n");
-    } else {
-        furi_string_cat_printf(text, "\nFound %u ECU(s)\n", found_count);
-    }
-
-    furi_string_cat_printf(text, "Scan complete.");
-    text_box_set_text(app->textBox, furi_string_get_cstr(text));
-
-    deinit_mcp2515(CAN);
-    free(CAN);
-    return 0;
+    submenu_reset(app->submenu);
 }

@@ -1,0 +1,8 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>body{margin:0;background:#8a9488;display:flex;flex-wrap:wrap}canvas{height:100vh}</style></head>
+<body><script type="module">
+import { treeTexture, coniferTexture, bushTexture } from "/src/driving-scene.js";
+for (const tex of [treeTexture(46), treeTexture(137), coniferTexture(894), bushTexture()]) {
+  document.body.appendChild(tex.image);
+}
+</script></body></html>

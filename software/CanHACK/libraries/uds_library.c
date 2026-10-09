@@ -87,8 +87,13 @@ UDS_SERVICE* uds_service_alloc(
     MCP_MODE mode,
     MCP_CLOCK clk,
     MCP_BITRATE bitrate) {
-    UDS_SERVICE* instance = malloc(sizeof(UDS_SERVICE));
+    UDS_SERVICE* instance = calloc(1, sizeof(UDS_SERVICE));
+    if(!instance) return NULL;
     instance->CAN = mcp_alloc(mode, clk, bitrate);
+    if(!instance->CAN) {
+        free(instance);
+        return NULL;
+    }
     instance->id_to_send = id_to_send;
     instance->id_to_received = id_to_received;
 
@@ -97,6 +102,7 @@ UDS_SERVICE* uds_service_alloc(
 
 // Init the mcp2515 with it respeclty mask and filters
 bool uds_init(UDS_SERVICE* uds_instance) {
+    if(!uds_instance || !uds_instance->CAN) return false;
     MCP2515* CAN = uds_instance->CAN;
     CAN->mode = MCP_NORMAL;
     if(mcp2515_init(CAN) != ERROR_OK) return false;
@@ -117,48 +123,37 @@ bool uds_init(UDS_SERVICE* uds_instance) {
     init_filter(CAN, 4, uds_instance->id_to_received);
     init_filter(CAN, 5, uds_instance->id_to_received);
 
+    uds_instance->initialized = true;
     return true;
 }
 
 // Free instance
 void free_uds(UDS_SERVICE* uds_instance) {
-    deinit_mcp2515(uds_instance->CAN);
-    free(uds_instance->CAN);
+    if(!uds_instance) return;
+    if(uds_instance->initialized) deinit_mcp2515(uds_instance->CAN);
+    free_mcp2515(uds_instance->CAN);
     free(uds_instance);
 }
 
 // Get Frames - with NRC 0x78 ResponsePending support
 bool read_frames_uds(MCP2515* CAN, uint32_t id, CANFRAME* frame) {
-    uint32_t time_delay = 0;
-    uint8_t pending_retries = 0;
-    const uint8_t max_pending_retries = 10;
-    const uint32_t normal_timeout = 6000;
-    const uint32_t pending_timeout = 50000; // 50ms for pending responses
-
-retry_pending:
-    time_delay = 0;
-
-    do {
-        if(read_can_message(CAN, frame) == ERROR_OK) {
-            if(frame->canId == id) {
-                // Check for NRC 0x78 (ResponsePending)
-                if(frame->buffer[0] == 0x03 &&
-                   frame->buffer[1] == 0x7F &&
-                   frame->buffer[3] == UDS_NRC_RESPONSE_PENDING) {
-                    pending_retries++;
-                    if(pending_retries < max_pending_retries) {
-                        goto retry_pending;
-                    }
-                    return false;
-                }
+    uint32_t start = furi_get_tick();
+    uint32_t timeout = 50;
+    uint32_t total_start = start;
+    while(furi_get_tick() - start < timeout && furi_get_tick() - total_start < 15000) {
+        if(uds_worker_cancelled()) return false;
+        if(read_can_message(CAN, frame) == ERROR_OK && frame->canId == id && !frame->req) {
+            if(frame->data_length >= 4 && frame->buffer[0] == 3 &&
+               frame->buffer[1] == 0x7F && frame->buffer[3] == UDS_NRC_RESPONSE_PENDING) {
+                start = furi_get_tick();
+                timeout = 5000;
+            } else {
                 return true;
             }
+        } else {
+            furi_delay_us(100);
         }
-        furi_delay_us(1);
-        time_delay++;
-
-    } while(time_delay < (pending_retries > 0 ? pending_timeout : normal_timeout));
-
+    }
     return false;
 }
 
@@ -169,217 +164,93 @@ bool uds_single_frame_request(
     uint8_t count_of_bytes,
     CANFRAME* frames_to_received,
     uint8_t count_of_frames) {
-    MCP2515* CAN = uds_instance->CAN;
-    CANFRAME frame_to_send = {0};
-    frame_to_send.canId = uds_instance->id_to_send;
-    // Guard against buffer overflow: max 7 data bytes in single frame (PCI + 7 = 8)
-    if(count_of_bytes > 7) count_of_bytes = 7;
-    frame_to_send.data_length = 8; // Always pad to 8 bytes per ISO 15765-2
-    uint32_t id_to_received = uds_instance->id_to_received;
-    ERROR_CAN ret = ERROR_OK;
-
-    // PCI byte + data
-    for(uint8_t i = 0; i < count_of_bytes + 1 && i < MAX_LEN; i++)
-        frame_to_send.buffer[i] = data_to_send[i];
-    // Pad remaining bytes with 0xCC
-    for(uint8_t i = count_of_bytes + 1; i < MAX_LEN; i++)
-        frame_to_send.buffer[i] = 0xCC;
-
-    ret = send_can_frame(CAN, &frame_to_send);
-
-    if(ret != ERROR_OK) return false;
-
-    memset(frame_to_send.buffer, 0, sizeof(frame_to_send.buffer));
-    frame_to_send.buffer[0] = 0x30;
-    frame_to_send.data_length = 8;
-    // Pad FC frame
-    for(uint8_t i = 3; i < MAX_LEN; i++)
-        frame_to_send.buffer[i] = 0xCC;
-
-    for(uint8_t i = 0; i < count_of_frames; i++) {
-        if(!read_frames_uds(CAN, id_to_received, &(frames_to_received[i]))) {
-            if(i == 0)
-                return false;
-            else
-                break;
-        }
-
-        // Send Flow Control after receiving a First Frame (PCI type 0x1X)
-        if(i == 0 && (frames_to_received[0].buffer[0] & 0xF0) == 0x10) {
-            ret = send_can_frame(CAN, &frame_to_send);
-            if(ret != ERROR_OK) return false;
-        }
-    }
-
-    return true;
+    if(!data_to_send || !count_of_bytes || count_of_bytes > 7 ||
+       data_to_send[0] != count_of_bytes) return false;
+    CANFRAME request = {0};
+    return uds_multi_frame_request(
+        uds_instance, data_to_send + 1, count_of_bytes, &request,
+        count_of_frames, frames_to_received);
 }
 
 // Function to get VIN
-bool uds_get_vin(UDS_SERVICE* uds_instance, FuriString* text) {
-    CANFRAME canframes[3];
-
-    memset(canframes, 0, sizeof(canframes));
-
-    uint8_t request[4] = {0x3, 0x22, 0xf1, 0x90};
-
-    if(!uds_single_frame_request(uds_instance, request, 3, canframes, 3)) return false;
-
-    if(canframes[0].buffer[2] != 0x62) return false;
-
-    char vin_name[17] = {'\0'};
-
-    uint8_t pos = 0;
-
-    for(uint8_t i = 0; i < 3; i++) {
-        uint8_t start_num = (i == 0) ? 5 : 1;
-
-        // Save bytes in the char array
-        for(uint8_t j = start_num; j < 8; j++) {
-            vin_name[pos] = (char)canframes[i].buffer[j];
-            if(pos >= sizeof(vin_name) - 1) break;
-            pos++;
-        }
-    }
-
-    furi_string_reset(text);
-
-    furi_string_cat_printf(text, "%.17s", vin_name);
-
+bool uds_get_vin(UDS_SERVICE* uds, FuriString* text) {
+    uint8_t request[] = {0x22, 0xF1, 0x90};
+    uint8_t response[20];
+    size_t len = 0;
+    if(uds_request_payload(uds, request, sizeof(request), response, sizeof(response), &len) != UdsOk || len != 20) return false;
+    char vin[18];
+    memcpy(vin, response + 3, 17);
+    vin[17] = '\0';
+    furi_string_set(text, vin);
     return true;
 }
 
 // Function to send multiframes
 // This will be on development
 bool uds_multi_frame_request(
-    UDS_SERVICE* uds_instance,
+    UDS_SERVICE* uds,
     uint8_t* data,
     uint8_t length,
-    CANFRAME* canframes_to_send,
-    uint8_t count_of_frames_to_received,
-    CANFRAME* canframes_to_received) {
-    uint8_t size_frames_to_send = 1;
-
-    // Condition to know the count of frames to send if the data need more frames
-    if(length > 7) {
-        if(((length - 6) % 7) != 0) {
-            size_frames_to_send = ((length - 6) / 7) + 2;
-        } else {
-            size_frames_to_send = ((length - 6) / 7) + 1;
-        }
-    }
-
-    // Set the frames if the data need more than one can frame
-    if(size_frames_to_send > 1) {
-        canframes_to_send[0].buffer[0] = 0x10; // Set the byte to indicate the first frame
-        canframes_to_send[0].buffer[1] = length; // The length of the data
-
-        // This counter works as a pivot to save the data in it respective byte of any frame
-        uint8_t counter = 0;
-
-        for(uint8_t i = 0; i < size_frames_to_send; i++) {
-            canframes_to_send[i].canId = uds_instance->id_to_send;
-            canframes_to_send[i].data_length = 8; // Always 8 bytes for multi-frame
-
-            if(i >= 1) canframes_to_send[i].buffer[0] = (0x20) + (i & 0xf);
-
-            uint8_t start_num = (i == 0) ? 2 : 1;
-
-            for(uint8_t j = start_num; j < 8; j++) {
-                if(counter < length) {
-                    canframes_to_send[i].buffer[j] = data[counter++];
-                } else {
-                    canframes_to_send[i].buffer[j] = 0xCC; // Pad remaining
-                }
-            }
-        }
-    }
-
-    // If the data only needs one frame
-    else {
-        canframes_to_send[0].canId = uds_instance->id_to_send;
-        canframes_to_send[0].data_length = 8; // Pad to 8 bytes
-        canframes_to_send[0].buffer[0] = length;
-        for(uint8_t i = 1; i < (length + 1) && i < MAX_LEN; i++) {
-            canframes_to_send[0].buffer[i] = data[i - 1];
-        }
-        // Pad remaining
-        for(uint8_t i = length + 1; i < MAX_LEN; i++) {
-            canframes_to_send[0].buffer[i] = 0xCC;
-        }
-    }
-
-    // Prepare Flow Control frame for receiving multi-frame responses
-    CANFRAME fc_frame = {0};
-    fc_frame.canId = uds_instance->id_to_send;
-    fc_frame.data_length = 8;
-    fc_frame.buffer[0] = 0x30; // FC: ContinueToSend
-    fc_frame.buffer[1] = 0x00; // Block Size: 0 = no limit
-    fc_frame.buffer[2] = 0x00; // STmin: 0ms
-    for(uint8_t i = 3; i < MAX_LEN; i++)
-        fc_frame.buffer[i] = 0xCC;
-
-    // From here is the work to send de canbus data
-
-    // Send the first frame
-    if(send_can_frame(uds_instance->CAN, &canframes_to_send[0]) != ERROR_OK) {
+    CANFRAME* sent,
+    uint8_t count,
+    CANFRAME* received) {
+    if(!uds || !data || !length || !sent || !count || !received) return false;
+    memset(received, 0, count * sizeof(CANFRAME));
+    // Preserve the raw-frame API for existing callers; the transport validates
+    // and reassembles the complete payload before exposing any result.
+    size_t offset = 0;
+    uint8_t index = 0;
+    do {
+        CANFRAME* frame = &sent[index];
+        memset(frame, 0, sizeof(*frame));
+        memset(frame->buffer, 0xCC, sizeof(frame->buffer));
+        frame->canId = uds->id_to_send;
+        frame->ext = uds->id_to_send > 0x7FF;
+        frame->data_length = 8;
+        size_t begin = 1;
+        if(length <= 7) frame->buffer[0] = length;
+        else if(index == 0) {
+            frame->buffer[0] = 0x10;
+            frame->buffer[1] = length;
+            begin = 2;
+        } else frame->buffer[0] = 0x20 | (index & 15);
+        size_t bytes = length - offset < 8 - begin ? length - offset : 8 - begin;
+        memcpy(frame->buffer + begin, data + offset, bytes);
+        offset += bytes;
+        index++;
+    } while(offset < length);
+    size_t capacity = count == 1 ? 7 : 6 + (size_t)(count - 1) * 7;
+    if(capacity > UDS_PAYLOAD_MAX) capacity = UDS_PAYLOAD_MAX;
+    uint8_t* payload = malloc(capacity);
+    if(!payload) return false;
+    size_t len = 0;
+    UdsStatus status = uds_request_payload(uds, data, length, payload, capacity, &len);
+    if(status != UdsOk && status != UdsNegative) {
+        free(payload);
         return false;
     }
-
-    // Wait message of the response
-    if(!read_frames_uds(
-           uds_instance->CAN, uds_instance->id_to_received, &canframes_to_received[0])) {
-        return false;
-    }
-
-    // To received multiple frames from single-frame request
-    if((canframes_to_received[0].buffer[0] & 0xF0) == 0x10 && count_of_frames_to_received > 1) {
-        send_can_frame(uds_instance->CAN, &fc_frame);
-
-        for(uint8_t i = 1; i < count_of_frames_to_received; i++) {
-            if(!read_frames_uds(
-                   uds_instance->CAN, uds_instance->id_to_received, &canframes_to_received[i]))
-                break;
-        }
-    }
-
-    // To know if it is only one frame to send
-    if(size_frames_to_send == 1) {
-        return true;
-    }
-
-    /*
-        Here is the end for only one frame received.
-        The next code describe how to send multple frames
-    */
-
-    // If the flow control is not ok
-    if(canframes_to_received[0].buffer[0] != 0x30) {
-        return false;
-    }
-
-    // Send the rest of the data
-    for(uint8_t i = 1; i < size_frames_to_send; i++) {
-        send_can_frame(uds_instance->CAN, &canframes_to_send[i]);
-    }
-
-    // Read the first ECU's response
-    if(!read_frames_uds(
-           uds_instance->CAN, uds_instance->id_to_received, &canframes_to_received[0])) {
-        return false;
-    }
-
-    // To received multiple frames after multi-frame send
-    if((canframes_to_received[0].buffer[0] & 0xF0) == 0x10 && count_of_frames_to_received > 1) {
-        send_can_frame(uds_instance->CAN, &fc_frame);
-
-        for(uint8_t i = 1; i < count_of_frames_to_received; i++) {
-            if(!read_frames_uds(
-                   uds_instance->CAN, uds_instance->id_to_received, &canframes_to_received[i]))
-                break;
-        }
-    }
-
-    return true;
+    offset = 0;
+    index = 0;
+    do {
+        CANFRAME* frame = &received[index];
+        frame->canId = uds->id_to_received;
+        frame->ext = uds->id_to_received > 0x7FF;
+        frame->data_length = 8;
+        memset(frame->buffer, 0xCC, sizeof(frame->buffer));
+        size_t begin = 1;
+        if(len <= 7) frame->buffer[0] = len;
+        else if(index == 0) {
+            frame->buffer[0] = 0x10 | (len >> 8);
+            frame->buffer[1] = len;
+            begin = 2;
+        } else frame->buffer[0] = 0x20 | (index & 15);
+        size_t bytes = len - offset < 8 - begin ? len - offset : 8 - begin;
+        memcpy(frame->buffer + begin, payload + offset, bytes);
+        offset += bytes;
+        index++;
+    } while(offset < len && index < count);
+    free(payload);
+    return offset == len;
 }
 
 // Set diagnostic session
@@ -395,7 +266,7 @@ bool uds_set_diagnostic_session(UDS_SERVICE* uds_instance, diagnostic_session se
            uds_instance, data, COUNT_OF(data), &frame_to_send, 1, &frame_to_received))
         return false;
 
-    if(frame_to_received.buffer[1] != 0x50) return false;
+    if(frame_to_received.buffer[1] != 0x50 || frame_to_received.buffer[2] != session) return false;
 
     return true;
 }
@@ -413,7 +284,7 @@ bool uds_reset_ecu(UDS_SERVICE* uds_instance, type_ecu_reset type) {
            uds_instance, data, COUNT_OF(data), &frame_to_send, 1, &frame_to_received))
         return false;
 
-    if(frame_to_received.buffer[1] != 0x51) return false;
+    if(frame_to_received.buffer[1] != 0x51 || frame_to_received.buffer[2] != type) return false;
 
     return true;
 }
@@ -429,7 +300,7 @@ bool uds_get_count_stored_dtc(UDS_SERVICE* uds_instance, uint16_t* count_of_dtc)
            uds_instance, data, COUNT_OF(data), &frame_to_send, 1, &frame_to_received))
         return false;
 
-    if(frame_to_received.buffer[1] != 0x59) return false;
+    if(frame_to_received.buffer[0] != 6 || frame_to_received.buffer[1] != 0x59 || frame_to_received.buffer[2] != 1) return false;
 
     *count_of_dtc = (uint16_t)frame_to_received.buffer[5] << 8 | frame_to_received.buffer[6];
 
@@ -438,120 +309,26 @@ bool uds_get_count_stored_dtc(UDS_SERVICE* uds_instance, uint16_t* count_of_dtc)
 
 // Show the real DTC
 void get_data_trouble_code(char* text, uint8_t* data) {
-    FuriString* code = furi_string_alloc();
-
-    uint8_t letter = data[0] >> 6;
-    uint8_t first_digit = (data[0] >> 4) & 0b0011;
-    uint8_t second_digit = data[0] & 0xf;
-    uint8_t third_digit = (data[1]) >> 4;
-    uint8_t fourth_digit = data[1] & 0xf;
-
-    switch(letter) {
-    case 0:
-        text[0] = 'P';
-        break;
-
-    case 1:
-        text[0] = 'C';
-        break;
-
-    case 2:
-        text[0] = 'B';
-        break;
-
-    case 3:
-        text[0] = 'U';
-        break;
-
-    default:
-        break;
-    }
-
-    furi_string_printf(
-        code, "%c%u%u%u%u", text[0], first_digit, second_digit, third_digit, fourth_digit);
-
-    for(uint8_t i = 0; i < 5; i++) {
-        text[i] = furi_string_get_char(code, i);
-    }
-
-    furi_string_free(code);
+    // Preserve the complete 24-bit UDS DTC instead of discarding its third byte.
+    snprintf(text, 7, "%02X%02X%02X", data[0], data[1], data[2]);
 }
 
 // Get the DTC
-bool uds_get_stored_dtc(UDS_SERVICE* uds_instance, char* codes[], uint16_t* count_of_dtc) {
-    // To get the count of DTC stored
-    if(!uds_get_count_stored_dtc(uds_instance, count_of_dtc)) {
-        return false;
+bool uds_get_stored_dtc(UDS_SERVICE* uds, char* codes[], uint16_t* count) {
+    if(!uds || !codes || !count || !*count || *count > 20) return false;
+    uint16_t capacity = *count;
+    uint8_t request[] = {0x19, 0x02, 0xFF};
+    uint8_t response[3 + 20 * 4];
+    size_t len = 0;
+    if(uds_request_payload(uds, request, sizeof(request), response, sizeof(response), &len) != UdsOk ||
+       len < 3 || (len - 3) % 4 != 0) return false;
+    size_t available = (len - 3) / 4;
+    if(available > capacity) return false;
+    for(size_t i = 0; i < available; i++) {
+        if(!codes[i]) return false;
+        get_data_trouble_code(codes[i], response + 3 + i * 4);
     }
-
-    uint8_t data[3] = {0x19, 0x2, 0xff};
-
-    CANFRAME frame_to_send = {0};
-    CANFRAME* frame_to_received = calloc(20, sizeof(CANFRAME));
-
-    // Get the canframes with the data
-    if(!uds_multi_frame_request(
-           uds_instance, data, COUNT_OF(data), &frame_to_send, 20, frame_to_received)) {
-        free(frame_to_received);
-        return false;
-    }
-
-    uint8_t (*data_dtc)[4] = calloc(*count_of_dtc, 4);
-    if(!data_dtc) {
-        free(frame_to_received);
-        return false;
-    }
-
-    // If the message has error
-    if(frame_to_received[0].buffer[0] == 0x7F) {
-        free(frame_to_received);
-        return false;
-    }
-
-    // If the data has only 1 DTC code
-    if(*count_of_dtc == 1) {
-        for(uint8_t i = 4; i < frame_to_received[0].data_length; i++) {
-            data_dtc[0][i - 4] = frame_to_received[0].buffer[i];
-        }
-        free(frame_to_received);
-        get_data_trouble_code(codes[0], data_dtc[0]);
-        free(data_dtc);
-
-        return true;
-    }
-
-    // If the data has more than only one dtc
-
-    uint8_t data_saver[80]; // Max reasonable DTC data
-    memset(data_saver, 0, sizeof(data_saver));
-
-    uint8_t counter = 0;
-
-    for(uint8_t i = 0; i < 5; i++) {
-        if(frame_to_received[i].canId != uds_instance->id_to_received) break;
-
-        uint32_t start_num = (i == 0) ? 5 : 1;
-
-        for(uint8_t j = start_num; j < frame_to_received[i].data_length; j++) {
-            if(counter < sizeof(data_saver))
-                data_saver[counter++] = frame_to_received[i].buffer[j];
-        }
-    }
-
-    counter = 0;
-
-    for(uint8_t i = 0; i < (*count_of_dtc); i++) {
-        for(uint8_t j = 0; j < 4; j++) {
-            data_dtc[i][j] = data_saver[counter++];
-        }
-    }
-
-    for(uint8_t i = 0; i < *count_of_dtc; i++) {
-        get_data_trouble_code(codes[i], data_dtc[i]);
-    }
-
-    free(data_dtc);
-    free(frame_to_received);
+    *count = available;
     return true;
 }
 
@@ -567,9 +344,7 @@ bool uds_delete_dtc(UDS_SERVICE* uds_instance) {
         return false;
     }
 
-    if(frame_to_received.buffer[1] == 0x7F) {
-        return false;
-    }
+    if(frame_to_received.buffer[0] != 1 || frame_to_received.buffer[1] != 0x54) return false;
 
     return true;
 }

@@ -1,0 +1,60 @@
+/* Physical cabin details appear only when there is space beside the cluster. */
+.scene-panel { container-name: driving-scene; }
+.cabin-pillar, .side-mirror, .cabin-vent { display: none; pointer-events: none; }
+.cabin-pillar {
+  position: absolute; top: 0; bottom: 210px; width: clamp(46px, 6cqw, 116px);
+  background: linear-gradient(100deg, #080d12, #222b31 35%, #303a40 61%, #131b22 86%, #090e13);
+  filter: drop-shadow(5px 2px 3px #0007);
+  clip-path: polygon(0 0, 20% 0, 100% 100%, 0 100%);
+}
+.cabin-pillar::after {
+  content: ""; position: absolute; inset: 0;
+  background: repeating-linear-gradient(8deg, #b6c1cc08 0 1px, transparent 1px 4px);
+}
+.cabin-pillar-left { left: 0; }
+.cabin-pillar-right { right: 0; transform: scaleX(-1); }
+.side-mirror {
+  position: absolute; bottom: 296px; width: clamp(150px, 15cqw, 266px); aspect-ratio: 1.88;
+  padding: 6px 7px 10px; border: 1px solid #87939b;
+  background: linear-gradient(165deg, #8a969e, #29343c 6%, #121b23 46%, #050b10 83%, #485661);
+  border-radius: 36% 18% 23% 32% / 35% 26% 25% 35%;
+  box-shadow: 0 8px 13px #04101766, inset 0 1px 0 #dfe9ec99, inset 0 -2px 0 #53606b;
+}
+.side-mirror::before {
+  content: ""; position: absolute; left: -35px; bottom: -24px; width: 68px; height: 65px;
+  background: linear-gradient(125deg, #27343b, #0e161d 62%, #05090d);
+  clip-path: polygon(0 3%, 100% 39%, 85% 79%, 0 100%); z-index: -1;
+}
+.side-mirror-left { left: clamp(23px, 2.5cqw, 52px); transform: rotate(-3deg); }
+.side-mirror-right { right: clamp(23px, 2.5cqw, 52px); transform: rotate(3deg); border-radius: 18% 36% 32% 23% / 26% 35% 35% 25%; }
+.side-mirror-right::before { left: auto; right: -35px; transform: scaleX(-1); }
+.mirror-glass { position: relative; width: 100%; height: 100%; overflow: hidden; border-radius: inherit; background: #809695; box-shadow: 0 0 0 2px #02070c; }
+.mirror-glass canvas { display: block; width: 100%; height: 100%; transform: scaleX(-1); filter: saturate(.78) brightness(.92); }
+.mirror-glass::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(155deg, #dcf3ff2e, transparent 34%, #8fceec0c 55%, #102b4730); box-shadow: inset 0 0 10px #091b3566, inset 0 1px 1px #ecfaffaa; }
+.mirror-glass::before {
+  content: ""; position: absolute; z-index: 1; right: -10%; bottom: -35%; width: 20%; height: 130%;
+  transform: rotate(-9deg); border-radius: 75% 0 0 0; border-left: 1px solid #b5c3cc77;
+  background: linear-gradient(90deg, #667d8c, #1f303e 25%, #0b141e 80%); box-shadow: -2px 0 4px #15273566;
+}
+.side-mirror-right .mirror-glass::before { right: auto; left: -10%; transform: scaleX(-1) rotate(-9deg); }
+.cabin-vent { position: absolute; bottom: 37px; width: clamp(120px, calc((100cqw - 890px) / 2), 290px); height: 174px; object-fit: fill; filter: drop-shadow(0 6px 9px #0006); }
+.cabin-vent-left { left: 30px; }
+.cabin-vent-right { right: 30px; transform: scaleX(-1); }
+
+/* A stitched brow and deeper dial wells soften the former flat panel. */
+.scene-hud {
+  border-color: #87939e52;
+  background: radial-gradient(ellipse at 50% 0, #36414a 0, #192129 32%, #0a1017 73%);
+  box-shadow: 0 -5px 0 #141d24, 0 -7px 0 #626e7980, 0 -15px 0 #1c252c, 0 -17px 0 #47535c66, 0 -21px 20px #05101a55, inset 0 2px 0 #d1dadd26, inset 0 -8px 14px #000b;
+}
+.scene-hud::before { content: ""; position: absolute; inset: -12px 9px auto; height: 36px; border-top: 1px dashed #9ba5af40; border-radius: 50% 50% 0 0 / 100% 100% 0 0; pointer-events: none; }
+.speed-hud::before, .rpm-hud::before { content: ""; position: absolute; inset: -4px; border-radius: 50%; box-shadow: inset 0 6px 12px #000b, 0 1px 0 #a3b3c72e; background: linear-gradient(135deg, #080e15, #192530); }
+.vehicle-status { border-color: #344352; box-shadow: 0 1px 0 #a5b8c540, 0 -3px 8px #000d, 0 0 0 4px #090f16, inset 0 0 13px #0009; }
+@container driving-scene (min-width: 1100px) {
+  .cabin-pillar, .side-mirror, .cabin-vent { display: block; }
+  .scene-topline { left: 55px; right: 55px; }
+}
+@media (max-height: 600px) {
+  .side-mirror { bottom: 253px; width: 150px; }
+  .cabin-pillar { bottom: 175px; }
+}

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="250" viewBox="0 0 1200 250" preserveAspectRatio="none" fill="none">
+  <defs>
+    <linearGradient id="leather" x1="600" y1="22" x2="600" y2="190" gradientUnits="userSpaceOnUse"><stop stop-color="#596267"/><stop offset=".07" stop-color="#303c43"/><stop offset=".42" stop-color="#1d282f"/><stop offset="1" stop-color="#111a23"/></linearGradient>
+    <linearGradient id="fascia" x1="600" y1="109" x2="600" y2="250" gradientUnits="userSpaceOnUse"><stop stop-color="#323d46"/><stop offset=".06" stop-color="#202b35"/><stop offset=".16" stop-color="#111b25"/><stop offset="1" stop-color="#070e16"/></linearGradient>
+    <linearGradient id="alloy" x1="0" y1="0" x2="1200" y2="0" gradientUnits="userSpaceOnUse"><stop stop-color="#405364"/><stop offset=".14" stop-color="#a3afb7"/><stop offset=".37" stop-color="#4d616f"/><stop offset=".55" stop-color="#7c909c"/><stop offset=".84" stop-color="#b0bec5"/><stop offset="1" stop-color="#304554"/></linearGradient>
+    <linearGradient id="light" x1="0" y1="0" x2="1200" y2="0" gradientUnits="userSpaceOnUse"><stop stop-color="#a0c8e2" stop-opacity=".15"/><stop offset=".2" stop-color="#acd8ee" stop-opacity=".65"/><stop offset=".5" stop-color="#83a9c3" stop-opacity=".25"/><stop offset=".8" stop-color="#acd8ee" stop-opacity=".65"/><stop offset="1" stop-color="#a0c8e2" stop-opacity=".15"/></linearGradient>
+    <pattern id="grain" width="6" height="5" patternUnits="userSpaceOnUse"><path d="M1 1h1m2 2h1" stroke="#c1d3dc" stroke-opacity=".035" stroke-linecap="round"/><path d="M2 4h1M4 1h1" stroke="#000" stroke-opacity=".16"/></pattern>
+    <pattern id="speaker" width="4" height="4" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#02080d" fill-opacity=".75"/><circle cx="2" cy="2.6" r=".55" fill="#697c88" fill-opacity=".2"/></pattern>
+  </defs>
+  <path d="M-20 99Q140 58 325 40Q600 5 875 40Q1060 58 1220 99V260H-20Z" fill="url(#leather)"/>
+  <path d="M-20 99Q140 58 325 40Q600 5 875 40Q1060 58 1220 99" stroke="#a0adb3" stroke-opacity=".42" stroke-width="1.4"/>
+  <path d="M0 101Q146 66 330 47Q600 17 870 47Q1054 66 1200 101" stroke="#9cacb6" stroke-opacity=".32" stroke-width=".6" stroke-dasharray="3 3"/>
+  <path d="M0 109Q167 88 360 85Q600 77 840 85Q1033 88 1200 109V250H0Z" fill="url(#fascia)"/>
+  <path d="M0 110Q167 89 360 86Q600 78 840 86Q1033 89 1200 110" stroke="url(#alloy)" stroke-width="3"/>
+  <path d="M0 110Q167 89 360 86Q600 78 840 86Q1033 89 1200 110" stroke="#d8e3eb" stroke-opacity=".35" stroke-width=".6"/>
+  <path d="M0 115Q167 94 360 91Q600 83 840 91Q1033 94 1200 115" stroke="#000" stroke-opacity=".65" stroke-width="3"/>
+  <path d="M0 117Q167 96 360 93M840 93Q1033 96 1200 117" stroke="url(#light)" stroke-width="1.3"/>
+  <path d="M-20 99Q140 58 325 40Q600 5 875 40Q1060 58 1220 99V260H-20Z" fill="url(#grain)"/>
+  <path d="M26 92Q120 70 230 59L235 68Q120 80 31 102Z" fill="url(#speaker)" opacity=".7"/>
+  <path d="M970 59Q1080 70 1174 92L1169 102Q1080 80 965 68Z" fill="url(#speaker)" opacity=".7"/>
+  <path d="M0 218Q152 195 294 206M906 206Q1048 195 1200 218" stroke="#000" stroke-opacity=".65" stroke-width="2"/>
+  <path d="M0 220Q152 197 294 208M906 208Q1048 197 1200 220" stroke="#79909f" stroke-opacity=".12"/>
+</svg>

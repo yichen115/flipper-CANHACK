@@ -19,39 +19,28 @@ static const char* save_logs[] = {"No Save", "Save All", "Only Address"};
  * Scene for the options
  */
 
-void callback_options(VariableItem* item) {
+static void bitrate_changed(VariableItem* item) {
     App* app = variable_item_get_context(item);
-    uint8_t index = variable_item_get_current_value_index(item);
-    uint8_t selected_index = variable_item_list_get_selected_item_index(app->varList);
-
-    switch(selected_index) {
-    case BitrateOption:
-        variable_item_set_current_value_text(item, bitratesValues[index]);
-        currentBitrate = index;
-        app->mcp_can->bitRate = index;
-        break;
-
-    case CrystalClkOption:
-        variable_item_set_current_value_text(item, clockValues[index]);
-        currentClock = index;
-        app->mcp_can->clck = index;
-
-        break;
-
-    case SaveLogsOption:
-        variable_item_set_current_value_text(item, save_logs[index]);
-        app->save_logs = index;
-        break;
-
-    default:
-        break;
-    }
+    currentBitrate = variable_item_get_current_value_index(item);
+    app->mcp_can->bitRate = currentBitrate;
+    variable_item_set_current_value_text(item, bitratesValues[currentBitrate]);
+}
+static void clock_changed(VariableItem* item) {
+    App* app = variable_item_get_context(item);
+    currentClock = variable_item_get_current_value_index(item);
+    app->mcp_can->clck = currentClock;
+    variable_item_set_current_value_text(item, clockValues[currentClock]);
+}
+static void save_changed(VariableItem* item) {
+    App* app = variable_item_get_context(item);
+    app->save_logs = variable_item_get_current_value_index(item);
+    variable_item_set_current_value_text(item, save_logs[app->save_logs]);
 }
 
 void settings_enter_callback(void* context, uint32_t index) {
     App* app = context;
     if(index == WiringOption) {
-        scene_manager_next_scene(app->scene_manager, app_scene_wiring_option);
+        view_dispatcher_send_custom_event(app->view_dispatcher, WiringOption);
     }
 }
 
@@ -61,22 +50,23 @@ void app_scene_settings_on_enter(void* context) {
     VariableItem* item;
 
     currentBitrate = app->mcp_can->bitRate;
+    currentClock = app->mcp_can->clck;
 
     variable_item_list_reset(app->varList);
 
     // First Item
     item = variable_item_list_add(
-        app->varList, "Bitrate", COUNT_OF(bitratesValues), callback_options, app);
+        app->varList, "Bitrate", COUNT_OF(bitratesValues), bitrate_changed, app);
     variable_item_set_current_value_index(item, currentBitrate);
     variable_item_set_current_value_text(item, bitratesValues[currentBitrate]);
 
     // Second Item
-    item = variable_item_list_add(app->varList, "Clock", 0, callback_options, app);
-    variable_item_set_current_value_index(item, 0);
+    item = variable_item_list_add(app->varList, "Clock", COUNT_OF(clockValues), clock_changed, app);
+    variable_item_set_current_value_index(item, currentClock);
     variable_item_set_current_value_text(item, clockValues[currentClock]);
 
     // Third Item
-    item = variable_item_list_add(app->varList, "Save LOGS?", 3, callback_options, app);
+    item = variable_item_list_add(app->varList, "Save LOGS?", 3, save_changed, app);
     variable_item_set_current_value_index(item, app->save_logs);
     variable_item_set_current_value_text(item, save_logs[app->save_logs]);
 
@@ -92,10 +82,11 @@ void app_scene_settings_on_enter(void* context) {
 // Scene on event
 bool app_scene_settings_on_event(void* context, SceneManagerEvent event) {
     App* app = context;
-    UNUSED(event);
-    UNUSED(app);
-    bool consumed = false;
-    return consumed;
+    if(event.type == SceneManagerEventTypeCustom && event.event == WiringOption) {
+        scene_manager_next_scene(app->scene_manager, app_scene_wiring_option);
+        return true;
+    }
+    return false;
 }
 
 // Scene on exit

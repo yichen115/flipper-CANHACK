@@ -9,6 +9,8 @@ typedef enum {
     SECURITY_SEED_OPTION,
     KEY_BRUTEFORCE_OPTION,
     DID_SCAN_OPTION,
+    ECU_INFO_OPTION,
+    DTC_OPTION,
 } uds_elements_list;
 
 static uint32_t selector_option = 0;
@@ -25,9 +27,19 @@ static void check_and_enter_function(App* app, uint32_t target_scene) {
 
 void uds_menu_callback(void* context, uint32_t index) {
     App* app = context;
+    view_dispatcher_send_custom_event(app->view_dispatcher, index);
+}
+
+static void uds_menu_select(App* app, uint32_t index) {
     selector_option = index;
 
     switch(index) {
+    case ECU_INFO_OPTION:
+        scene_manager_next_scene(app->scene_manager, app_scene_uds_info_option);
+        break;
+    case DTC_OPTION:
+        scene_manager_next_scene(app->scene_manager, app_scene_uds_get_dtc_menu_option);
+        break;
     case UDS_SETTINGS:
         scene_manager_next_scene(app->scene_manager, app_scene_uds_settings_option);
         break;
@@ -74,6 +86,8 @@ void app_scene_uds_menu_on_enter(void* context) {
     // Settings first
     submenu_add_item(
         app->submenu, "Settings", UDS_SETTINGS, uds_menu_callback, app);
+    submenu_add_item(app->submenu, "ECU Info / VIN", ECU_INFO_OPTION, uds_menu_callback, app);
+    submenu_add_item(app->submenu, "Read / Clear DTC", DTC_OPTION, uds_menu_callback, app);
     // ECU Discovery (no session needed)
     submenu_add_item(
         app->submenu, "ECU Discovery", ECU_DISCOVERY_OPTION, uds_menu_callback, app);
@@ -98,8 +112,11 @@ void app_scene_uds_menu_on_enter(void* context) {
 }
 
 bool app_scene_uds_menu_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
+    App* app = context;
+    if(event.type == SceneManagerEventTypeCustom) {
+        uds_menu_select(app, event.event);
+        return true;
+    }
     return false;
 }
 

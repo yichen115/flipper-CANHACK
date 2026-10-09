@@ -3,6 +3,7 @@
 
 #include "Spi_lib.h"
 #include "log_user.h"
+#include "can_types.h"
 
 #ifdef __LOG_USER_H_
 // for debugging errors
@@ -310,6 +311,9 @@ typedef enum {
     ERROR_GET_TXB_FTIMEOUT = 6,
     ERROR_SEND_MSG_TIMEOUT = 7,
     ERROR_WRONG_BITRATE = 8,
+    ERROR_TX_UNCERTAIN = 9, // Submission/completion could not be confirmed: never blindly retry.
+    ERROR_SPI = 10,
+    ERROR_BUSOFF = 11,
 } ERROR_CAN;
 
 // MCP2515 BITRATES VALUES
@@ -328,13 +332,6 @@ typedef enum {
 } MCP_CLOCK;
 
 // This a struct to define the Can Frame
-typedef struct {
-    uint32_t canId;
-    uint8_t ext;
-    uint8_t req;
-    uint8_t data_length;
-    uint8_t buffer[MAX_LEN];
-} CANFRAME;
 
 // This Struct is to cinfig and work with the MCP2515 device
 typedef struct {
@@ -342,6 +339,8 @@ typedef struct {
     FuriHalSpiBusHandle* spi;
     MCP_BITRATE bitRate;
     MCP_CLOCK clck;
+    uint8_t next_rx;
+    bool spi_initialized;
 } MCP2515;
 
 /*  This are the function that we can work

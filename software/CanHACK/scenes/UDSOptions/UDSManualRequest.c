@@ -20,7 +20,7 @@ static int32_t uds_multiframe_request_thread(void* context);
  * Scene for UDS MENU
  */
 
-void callback_input_manual_sender_uds(void* context, uint32_t index) {
+static void manual_sender_select(void* context, uint32_t index) {
     App* app = context;
 
     selected_item = index;
@@ -54,32 +54,23 @@ void callback_input_manual_sender_uds(void* context, uint32_t index) {
     }
 }
 
-void callback_single_frame_request_menu(VariableItem* item) {
-    App* app = variable_item_get_context(item);
-    uint8_t index = variable_item_get_current_value_index(item);
-    uint8_t selected_index = variable_item_list_get_selected_item_index(app->varList);
-    FuriString* text = app->text;
+void callback_input_manual_sender_uds(void* context, uint32_t index) {
+    App* app = context;
+    view_dispatcher_send_custom_event(app->view_dispatcher, index);
+}
 
-    furi_string_reset(text);
+static void manual_frame_count_changed(VariableItem* item) {
+    count_of_frames = variable_item_get_current_value_index(item) + 1;
+    char value[4];
+    snprintf(value, sizeof(value), "%u", count_of_frames);
+    variable_item_set_current_value_text(item, value);
+}
 
-    switch(selected_index) {
-    case 2:
-        count_of_frames = index + 1;
-        variable_item_set_current_value_index(item, index);
-        furi_string_cat_printf(text, "%u", count_of_frames);
-        variable_item_set_current_value_text(item, furi_string_get_cstr(text));
-        break;
-
-    case 3:
-        count_of_bytes = index + 1;
-        variable_item_set_current_value_index(item, index);
-        furi_string_cat_printf(text, "%u", count_of_bytes);
-        variable_item_set_current_value_text(item, furi_string_get_cstr(text));
-        break;
-
-    default:
-        break;
-    }
+static void manual_byte_count_changed(VariableItem* item) {
+    count_of_bytes = variable_item_get_current_value_index(item) + 1;
+    char value[4];
+    snprintf(value, sizeof(value), "%u", count_of_bytes);
+    variable_item_set_current_value_text(item, value);
 }
 
 void app_scene_uds_single_frame_request_sender_on_enter(void* context) {
@@ -87,11 +78,14 @@ void app_scene_uds_single_frame_request_sender_on_enter(void* context) {
     FuriString* text = app->text;
     VariableItem* item;
 
-    id_request = (id_request_array[0] << 24) | (id_request_array[1] << 16) |
-                 (id_request_array[2] << 8) | (id_request_array[3]);
+    id_request = ((uint32_t)id_request_array[0] << 24) | ((uint32_t)id_request_array[1] << 16) |
+                 ((uint32_t)id_request_array[2] << 8) | (id_request_array[3]);
 
-    id_response = (id_response_array[0] << 24) | (id_response_array[1] << 16) |
-                  (id_response_array[2] << 8) | (id_response_array[3]);
+    id_response = ((uint32_t)id_response_array[0] << 24) | ((uint32_t)id_response_array[1] << 16) |
+                  ((uint32_t)id_response_array[2] << 8) | (id_response_array[3]);
+
+    id_request &= 0x1FFFFFFF;
+    id_response &= 0x1FFFFFFF;
 
     // ID REQUEST  0
     item = variable_item_list_add(app->varList, "ID REQUEST", 0, NULL, app);
@@ -109,7 +103,7 @@ void app_scene_uds_single_frame_request_sender_on_enter(void* context) {
 
     // COUNT OF FRAMES TO GET   2
     item = variable_item_list_add(
-        app->varList, "Frames to get", 100, callback_single_frame_request_menu, app);
+        app->varList, "Frames to get", 100, manual_frame_count_changed, app);
     variable_item_set_current_value_index(item, count_of_frames - 1);
     furi_string_reset(text);
     furi_string_cat_printf(text, "%u", count_of_frames);
@@ -117,7 +111,7 @@ void app_scene_uds_single_frame_request_sender_on_enter(void* context) {
 
     // SET COUNT OF BYTES   3
     item = variable_item_list_add(
-        app->varList, "Bytes", 100, callback_single_frame_request_menu, app);
+        app->varList, "Bytes", 100, manual_byte_count_changed, app);
     variable_item_set_current_value_index(item, count_of_bytes - 1);
     furi_string_reset(text);
     furi_string_cat_printf(text, "%u", count_of_bytes);
@@ -138,12 +132,11 @@ void app_scene_uds_single_frame_request_sender_on_enter(void* context) {
 }
 
 bool app_scene_uds_single_frame_request_sender_on_event(void* context, SceneManagerEvent event) {
-    App* app = context;
-    bool consumed = false;
-    UNUSED(app);
-    UNUSED(event);
-
-    return consumed;
+    if(event.type == SceneManagerEventTypeCustom && event.event <= 5) {
+        manual_sender_select(context, event.event);
+        return true;
+    }
+    return false;
 }
 
 void app_scene_uds_single_frame_request_sender_on_exit(void* context) {
@@ -166,14 +159,14 @@ void input_manual_uds(void* context) {
     switch(state) {
     case 0:
 
-        id_request = (id_request_array[0] << 24) | (id_request_array[1] << 16) |
-                     (id_request_array[2] << 8) | (id_request_array[3]);
+        id_request = ((uint32_t)id_request_array[0] << 24) | ((uint32_t)id_request_array[1] << 16) |
+                     ((uint32_t)id_request_array[2] << 8) | (id_request_array[3]);
         break;
 
     case 1:
 
-        id_response = (id_response_array[0] << 24) | (id_response_array[1] << 16) |
-                      (id_response_array[2] << 8) | (id_response_array[3]);
+        id_response = ((uint32_t)id_response_array[0] << 24) | ((uint32_t)id_response_array[1] << 16) |
+                      ((uint32_t)id_response_array[2] << 8) | (id_response_array[3]);
         break;
 
     default:
@@ -274,8 +267,7 @@ bool app_scene_uds_single_frame_request_response_on_event(void* context, SceneMa
 
 void app_scene_uds_single_frame_request_response_on_exit(void* context) {
     App* app = context;
-    furi_thread_join(app->thread);
-    furi_thread_free(app->thread);
+    app_uds_stop_worker(app);
     text_box_reset(app->textBox);
 }
 
@@ -285,6 +277,7 @@ void app_scene_uds_single_frame_request_response_on_exit(void* context) {
 
 static int32_t uds_multiframe_request_thread(void* context) {
     App* app = context;
+    if(!app || !app->mcp_can) return 0;
     FuriString* text = app->text;
     furi_string_reset(text);
     text_box_set_text(app->textBox, furi_string_get_cstr(text));
@@ -294,13 +287,25 @@ static int32_t uds_multiframe_request_thread(void* context) {
     CANFRAME* canframes_to_received = (CANFRAME*)calloc(count_of_frames, sizeof(CANFRAME));
 
     CANFRAME* canframes_to_send = (CANFRAME*)calloc(15, sizeof(CANFRAME));
+    if(!canframes_to_received || !canframes_to_send) {
+        free(canframes_to_received);
+        free(canframes_to_send);
+        text_box_set_text(app->textBox, "Out of memory");
+        return 0;
+    }
 
     UDS_SERVICE* uds_service =
         uds_service_alloc(id_request, id_response, CAN->mode, CAN->clck, CAN->bitRate);
+    if(!uds_service) {
+        free(canframes_to_received);
+        free(canframes_to_send);
+        text_box_set_text(app->textBox, "Out of memory");
+        return 0;
+    }
 
     bool run = uds_init(uds_service);
 
-    furi_delay_ms(500);
+    uds_service->timeout_ms = app->uds_timeout_ms;
 
     if(run) {
         if(uds_multi_frame_request(

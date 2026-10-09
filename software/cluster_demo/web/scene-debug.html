@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>html,body{margin:0;height:100%}#scene-root{position:fixed;inset:0}#scene-root canvas{width:100%!important;height:100%!important;display:block}#out{position:fixed;left:0;top:0;z-index:9;background:#fff;font:10px monospace;margin:0;white-space:pre-wrap;max-width:60%}</style></head>
+<body><div id="scene-root" data-debug></div><pre id="out"></pre><script type="module">
+import { createDrivingScene } from "/src/driving-scene.js";
+createDrivingScene(document.getElementById("scene-root"), () => 0);
+setTimeout(() => {
+  const { scene } = window.__scene;
+  const report = [];
+  for (const obj of scene.children) {
+    if (!obj.isInstancedMesh) continue;
+    const m = obj.instanceMatrix.array;
+    const bad = [];
+    for (let i = 0; i < obj.count; i += 1) {
+      const o = i * 16;
+      const identity = m[o] === 1 && m[o+1] === 0 && m[o+2] === 0 && m[o+3] === 0 &&
+        m[o+4] === 0 && m[o+5] === 1 && m[o+6] === 0 && m[o+7] === 0 &&
+        m[o+8] === 0 && m[o+9] === 0 && m[o+10] === 1 && m[o+11] === 0 &&
+        m[o+12] === 0 && m[o+13] === 0 && m[o+14] === 0 && m[o+15] === 1;
+      if (identity) bad.push(i);
+    }
+    if (bad.length) report.push({ child: scene.children.indexOf(obj), count: obj.count, bad: bad.length, first: bad.slice(0, 12), last: bad.slice(-4) });
+  }
+  document.getElementById("out").textContent = JSON.stringify(report, null, 1);
+}, 2500);
+</script></body></html>

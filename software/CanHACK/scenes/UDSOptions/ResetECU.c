@@ -9,8 +9,7 @@ static int32_t ecu_reset_thread(void* context);
 // callback for the diagnostic sessions menu
 void submenu_ecu_reset_callback(void* context, uint32_t index) {
     App* app = context;
-    reset = index + 1;
-    scene_manager_next_scene(app->scene_manager, app_scene_uds_ecu_reset_response_option);
+    view_dispatcher_send_custom_event(app->view_dispatcher, index);
 }
 
 // Scene on enter
@@ -30,8 +29,12 @@ void app_scene_uds_ecu_reset_on_enter(void* context) {
 
 // Scene on event
 bool app_scene_uds_ecu_reset_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
+    App* app = context;
+    if(event.type == SceneManagerEventTypeCustom && event.event <= 2) {
+        reset = event.event + 1;
+        scene_manager_next_scene(app->scene_manager, app_scene_uds_ecu_reset_response_option);
+        return true;
+    }
     return false;
 }
 
@@ -49,7 +52,7 @@ void app_scene_uds_ecu_reset_response_on_enter(void* context) {
     widget_reset(app->widget);
     view_dispatcher_switch_to_view(app->view_dispatcher, ViewWidget);
 
-    app->thread = furi_thread_alloc_ex("SetSessionThread", 1024, ecu_reset_thread, app);
+    app->thread = furi_thread_alloc_ex("SetSessionThread", 4096, ecu_reset_thread, app);
     furi_thread_start(app->thread);
 }
 
@@ -68,28 +71,24 @@ bool app_scene_uds_ecu_reset_response_on_event(void* context, SceneManagerEvent 
 // Scene on exit for the response
 void app_scene_uds_ecu_reset_response_on_exit(void* context) {
     App* app = context;
+    app_uds_stop_worker(app);
     widget_reset(app->widget);
-
-    furi_thread_join(app->thread);
-    furi_thread_free(app->thread);
 }
 
 // Thread to work
 static int32_t ecu_reset_thread(void* context) {
     App* app = context;
-    MCP2515* CAN = app->mcp_can;
 
     FuriString* text = app->text;
 
     furi_string_reset(text);
 
-    UDS_SERVICE* uds_service = uds_service_alloc(
-        app->uds_send_id, app->uds_received_id, CAN->mode, CAN->clck, CAN->bitRate);
+    UDS_SERVICE* uds_service = app_uds_open(app);
 
-    if(uds_init(uds_service)) {
-        furi_delay_ms(500);
+    if(uds_service) {
 
         if(uds_reset_ecu(uds_service, (type_ecu_reset)reset)) {
+            app->uds_session_type = 1;
             widget_add_string_multiline_element(
                 app->widget, 64, 32, AlignCenter, AlignCenter, FontPrimary, "RESET OK");
 

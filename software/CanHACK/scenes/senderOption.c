@@ -1,4 +1,6 @@
 #include "../app_user.h"
+#include "../libraries/can_clock.h"
+#include "../libraries/can_trace.h"
 
 typedef enum {
     SEND_OK,
@@ -48,16 +50,27 @@ void empty_input_callback(void* context, uint32_t index) {
  * Threads
  */
 
-static int32_t thread_to_send_once(void* context);
-static int32_t thread_to_send_periodic(void* context);
-static int32_t thread_to_send_repeat(void* context);
+static int32_t sender_worker(void* context);
+#define SENDER_REFRESH 100U
+#define SENDER_EVENT_REBUILD 1000U
+static struct {
+    FuriMutex* mutex;
+    uint32_t attempted;
+    uint32_t sent;
+    uint32_t errors;
+    uint32_t total;
+    uint32_t remaining_ms;
+    ERROR_CAN last_status;
+    bool finished;
+    bool init_failed;
+} sender;
 
 /**
  *  Scene for the Menu Sender
  */
 
 // Option callback using button OK
-void callback_input_sender_options(void* context, uint32_t index) {
+static void sender_select(void* context, uint32_t index) {
     App* app = context;
     app->sender_selected_item = index;
 
@@ -74,12 +87,18 @@ void callback_input_sender_options(void* context, uint32_t index) {
         break;
 
     case 3:
+        if(!app->frame_to_send->data_length || app->frame_to_send->req) break;
         scene_manager_set_scene_state(app->scene_manager, app_scene_input_data_option, 0xff);
         scene_manager_next_scene(app->scene_manager, app_scene_input_data_option);
 
     default:
         break;
     }
+}
+
+void callback_input_sender_options(void* context, uint32_t index) {
+    App* app = context;
+    view_dispatcher_send_custom_event(app->view_dispatcher, index);
 }
 
 void set_timing_menu_callback(VariableItem* item) {
@@ -142,10 +161,11 @@ void app_scene_sender_on_enter(void* context) {
 
 // Menu Sender On event
 bool app_scene_sender_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
-    bool consumed = false;
-    return consumed;
+    if(event.type == SceneManagerEventTypeCustom && event.event <= 3) {
+        sender_select(context, event.event);
+        return true;
+    }
+    return false;
 }
 
 // Menu Sender On exit
@@ -165,7 +185,7 @@ void set_timings_callback(VariableItem* item) {
     timing = variable_item_get_current_value_index(item);
     variable_item_set_current_value_text(item, timing_texts[timing]);
 
-    set_timing_view(app);
+    view_dispatcher_send_custom_event(app->view_dispatcher, SENDER_EVENT_REBUILD);
 }
 
 void set_time_sender(VariableItem* item) {
@@ -255,10 +275,11 @@ void app_scene_set_timing_on_enter(void* context) {
 
 // Menu Sender On event
 bool app_scene_set_timing_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
-    bool consumed = false;
-    return consumed;
+    if(event.type == SceneManagerEventTypeCustom && event.event == SENDER_EVENT_REBUILD) {
+        set_timing_view(context);
+        return true;
+    }
+    return false;
 }
 
 // Menu Sender On exit
@@ -274,7 +295,7 @@ void app_scene_set_timing_on_exit(void* context) {
 void set_data_view(App* app);
 
 // Go to set the option
-void input_set_data(void* context, uint32_t index) {
+static void sender_data_select(void* context, uint32_t index) {
     App* app = context;
 
     if(index == 1 || index > 3) {
@@ -283,13 +304,18 @@ void input_set_data(void* context, uint32_t index) {
     }
 }
 
+void input_set_data(void* context, uint32_t index) {
+    App* app = context;
+    view_dispatcher_send_custom_event(app->view_dispatcher, index);
+}
+
 // Callback for the frame
 void set_frame_request_callback(VariableItem* item) {
     App* app = variable_item_get_context(item);
 
     app->frame_to_send->req = variable_item_get_current_value_index(item);
 
-    set_data_view(app);
+    view_dispatcher_send_custom_event(app->view_dispatcher, SENDER_EVENT_REBUILD);
 }
 
 // Callback to set the data length
@@ -298,7 +324,7 @@ void set_data_length_callback(VariableItem* item) {
 
     app->frame_to_send->data_length = variable_item_get_current_value_index(item);
 
-    set_data_view(app);
+    view_dispatcher_send_custom_event(app->view_dispatcher, SENDER_EVENT_REBUILD);
 }
 
 // View to set the Data
@@ -358,10 +384,12 @@ void app_scene_set_data_sender_on_enter(void* context) {
 
 // Menu Sender On event
 bool app_scene_set_data_sender_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
-    bool consumed = false;
-    return consumed;
+    if(event.type == SceneManagerEventTypeCustom) {
+        if(event.event == SENDER_EVENT_REBUILD) set_data_view(context);
+        else sender_data_select(context, event.event);
+        return true;
+    }
+    return false;
 }
 
 // Menu Sender On exit
@@ -382,8 +410,10 @@ void input_byte_sender_callback(void* context) {
 
     switch(state) {
     case 1:
-        app->frame_to_send->canId = (can_id[0] << 24) | (can_id[1] << 16) | (can_id[2] << 8) |
+        app->frame_to_send->canId = ((uint32_t)can_id[0] << 24) | ((uint32_t)can_id[1] << 16) | ((uint32_t)can_id[2] << 8) |
                                     (can_id[3]);
+        app->frame_to_send->canId &= 0x1FFFFFFF;
+        app->frame_to_send->ext = app->frame_to_send->canId > 0x7FF;
         break;
 
     default:
@@ -609,177 +639,104 @@ void draw_finished_to_send(App* app) {
         app->widget, 64, 32, AlignCenter, AlignCenter, FontPrimary, "FINISHED\n TO SEND");
 }
 
-// Sender on enter
+static void sender_refresh(App* app) {
+    furi_mutex_acquire(sender.mutex, FuriWaitForever);
+    uint32_t attempted = sender.attempted, sent = sender.sent, errors = sender.errors;
+    uint32_t total = sender.total, remaining = sender.remaining_ms;
+    bool finished = sender.finished, init_failed = sender.init_failed;
+    ERROR_CAN status = sender.last_status;
+    furi_mutex_release(sender.mutex);
+    widget_reset(app->widget);
+    if(init_failed) { draw_device_no_connected(app); return; }
+    furi_string_printf(app->text, "%s %03lX\nSent %lu  Errors %lu\nAttempts %lu",
+        finished ? "Finished" : timing == 0 ? "Once" : timing == 1 ? "Periodic" : "Repeat",
+        app->frame_to_send->canId, sent, errors, attempted);
+    if(timing != 1) furi_string_cat_printf(app->text, "/%lu", total);
+    if(!attempted && !finished) furi_string_cat_printf(app->text, "\nIn %lu ms", remaining);
+    if(errors) furi_string_cat_printf(app->text, "\nCAN status %u", status);
+    furi_string_cat_printf(app->text, "\nBACK: stop");
+    widget_add_string_multiline_element(app->widget, 64, 32, AlignCenter, AlignCenter,
+        FontSecondary, furi_string_get_cstr(app->text));
+}
+
 void app_scene_send_message_on_enter(void* context) {
     App* app = context;
-
+    memset(&sender, 0, sizeof(sender));
+    sender.mutex = furi_mutex_alloc(FuriMutexTypeNormal);
+    sender.total = timing == 0 ? 1 : can_scaled_count(quantity_to_repeat, multiply_quantity);
+    sender.remaining_ms = can_scaled_count(time, multiply);
     widget_reset(app->widget);
-
-    switch(timing) {
-    case 0:
-        app->thread = furi_thread_alloc_ex("Sender Thread", 1024, thread_to_send_once, app);
-        break;
-
-    case 1:
-        app->thread = furi_thread_alloc_ex("Sender Thread", 1024, thread_to_send_periodic, app);
-        break;
-
-    default:
-        app->thread = furi_thread_alloc_ex("Sender Thread", 1024, thread_to_send_repeat, app);
-        break;
-    }
-
-    furi_thread_start(app->thread);
-
+    sender_refresh(app);
     view_dispatcher_switch_to_view(app->view_dispatcher, ViewWidget);
+    app->thread = furi_thread_alloc_ex("CanSender", 3072, sender_worker, app);
+    furi_thread_start(app->thread);
 }
 
-// Sender on event
 bool app_scene_send_message_on_event(void* context, SceneManagerEvent event) {
-    App* app = context;
-    bool consumed = false;
-
-    if(event.type == SceneManagerEventTypeCustom) {
-        switch(event.event) {
-        case SEND_OK:
-            draw_send_ok(app);
-            break;
-
-        case SEND_ERROR:
-            draw_send_wrong(app);
-            break;
-
-        case DEVICE_NO_CONNECTED:
-            draw_device_no_connected(app);
-            break;
-
-        default:
-            break;
-        }
-    }
-
-    return consumed;
+    if(event.type == SceneManagerEventTypeTick) { sender_refresh(context); return true; }
+    return false;
 }
 
-// Sender on exit
 void app_scene_send_message_on_exit(void* context) {
     App* app = context;
-    furi_thread_join(app->thread);
-    furi_thread_free(app->thread);
-
+    if(app->thread) {
+        FuriThreadId id = furi_thread_get_id(app->thread);
+        if(id) furi_thread_flags_set(id, THREAD_SNIFFER_STOP);
+        furi_thread_join(app->thread);
+        furi_thread_free(app->thread);
+        app->thread = NULL;
+    }
+    furi_mutex_free(sender.mutex);
+    sender.mutex = NULL;
     widget_reset(app->widget);
 }
 
-/**
- * Thread to send Once
- */
-
-static int32_t thread_to_send_once(void* context) {
+static int32_t sender_worker(void* context) {
     App* app = context;
-    MCP2515* mcp_can = app->mcp_can;
-    mcp_can->mode = MCP_NORMAL;
-
-    bool debug = (mcp2515_init(mcp_can) == ERROR_OK) ? true : false;
-
-    if(!debug) draw_device_no_connected(app);
-
-    uint32_t timer_send = time * (pow(10, multiply));
-
-    uint32_t last_time = furi_get_tick();
-
-    uint32_t timer = 0;
-
-    while(debug && furi_hal_gpio_read(&gpio_button_back)) {
-        timer = timer_send - (furi_get_tick() - last_time);
-
-        if(timer_send < (furi_get_tick() - last_time)) {
-            draw_data_send(app, (send_can_frame(mcp_can, app->frame_to_send) == ERROR_OK), 1);
-            break;
-        } else
-            furi_delay_ms(1);
-
-        draw_timer_to_send(app, (double)timer / 1000);
+    MCP2515* can = app->mcp_can;
+    can->mode = MCP_NORMAL;
+    if(mcp2515_init(can) != ERROR_OK) {
+        furi_mutex_acquire(sender.mutex, FuriWaitForever);
+        sender.init_failed = true;
+        sender.finished = true;
+        furi_mutex_release(sender.mutex);
+        deinit_mcp2515(can);
+        return 0;
     }
-
-    deinit_mcp2515(mcp_can);
-
-    return 0;
-}
-
-/**
- *  Thread to send Periodic
- */
-
-static int32_t thread_to_send_periodic(void* context) {
-    App* app = context;
-    MCP2515* mcp_can = app->mcp_can;
-    mcp_can->mode = MCP_NORMAL;
-
-    bool debug = (mcp2515_init(mcp_can) == ERROR_OK) ? true : false;
-
-    if(!debug) draw_device_no_connected(app);
-
-    draw_waiting_time_to_send(app);
-
-    uint32_t timer_send = time * (pow(10, multiply));
-
-    uint32_t last_time = furi_get_tick();
-
-    uint32_t count = 1;
-
-    while(debug && furi_hal_gpio_read(&gpio_button_back)) {
-        if(timer_send < (furi_get_tick() - last_time)) {
-            draw_data_send(app, (send_can_frame(mcp_can, app->frame_to_send) == ERROR_OK), count);
-            count++;
-            last_time = furi_get_tick();
-        } else
-            furi_delay_ms(1);
-    }
-
-    deinit_mcp2515(mcp_can);
-
-    return 0;
-}
-
-/**
- * Thread to send multiple times
- */
-
-static int32_t thread_to_send_repeat(void* context) {
-    App* app = context;
-    MCP2515* mcp_can = app->mcp_can;
-    mcp_can->mode = MCP_NORMAL;
-
-    bool debug = (mcp2515_init(mcp_can) == ERROR_OK) ? true : false;
-
-    if(!debug) draw_device_no_connected(app);
-
-    draw_waiting_time_to_send(app);
-
-    uint32_t timer_send = time * (pow(10, multiply));
-
-    uint32_t last_time = furi_get_tick();
-
-    uint8_t total_count = quantity_to_repeat * (pow(10, multiply_quantity));
-
-    uint32_t count = 1;
-
-    while(debug && furi_hal_gpio_read(&gpio_button_back)) {
-        if(timer_send < (furi_get_tick() - last_time)) {
-            draw_data_send(app, (send_can_frame(mcp_can, app->frame_to_send) == ERROR_OK), count);
-            count++;
-            last_time = furi_get_tick();
-        } else
-            furi_delay_ms(1);
-
-        if(count > total_count) {
-            furi_delay_ms(500);
-            draw_finished_to_send(app);
-            break;
+    CanClock clock = can_clock_start();
+    uint64_t period = (uint64_t)can_scaled_count(time, multiply) * 1000;
+    uint64_t deadline = period;
+    uint32_t attempted = 0;
+    uint32_t last_ui = furi_get_tick();
+    while(!(furi_thread_flags_get() & THREAD_SNIFFER_STOP)) {
+        uint64_t now = can_clock_us(&clock);
+        if(now < deadline) {
+            if(furi_get_tick() - last_ui >= SENDER_REFRESH) {
+                furi_mutex_acquire(sender.mutex, FuriWaitForever);
+                sender.remaining_ms = (deadline - now + 999) / 1000;
+                furi_mutex_release(sender.mutex);
+                last_ui = furi_get_tick();
+            }
+            // Bound the wait so the countdown snapshot remains current.
+            if(!can_wait_until(&clock, deadline < now + 10000 ? deadline : now + 10000)) break;
+            continue;
         }
+        ERROR_CAN status = send_can_frame(can, app->frame_to_send);
+        attempted++;
+        furi_mutex_acquire(sender.mutex, FuriWaitForever);
+        sender.attempted = attempted;
+        sender.last_status = status;
+        if(status == ERROR_OK) sender.sent++;
+        else sender.errors++;
+        furi_mutex_release(sender.mutex);
+        if((timing != 1 && attempted >= sender.total) || attempted == UINT32_MAX ||
+           status == ERROR_BUSOFF || status == ERROR_TX_UNCERTAIN || status == ERROR_SPI) break;
+        deadline = can_periodic_next(deadline, period, can_clock_us(&clock));
     }
-
-    deinit_mcp2515(mcp_can);
-
+    can_clock_stop(&clock);
+    deinit_mcp2515(can);
+    furi_mutex_acquire(sender.mutex, FuriWaitForever);
+    sender.finished = true;
+    furi_mutex_release(sender.mutex);
     return 0;
 }

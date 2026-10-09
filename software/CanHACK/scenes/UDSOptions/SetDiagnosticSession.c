@@ -11,9 +11,7 @@ static int32_t set_diagnostic_session_thread(void* context);
 // callback for the diagnostic sessions menu
 void submenu_diagnostic_session_callback(void* context, uint32_t index) {
     App* app = context;
-    session = index + 1;
-    selected_item = index;
-    scene_manager_next_scene(app->scene_manager, app_scene_uds_set_session_response);
+    view_dispatcher_send_custom_event(app->view_dispatcher, index);
 }
 
 // Scene on enter
@@ -39,8 +37,13 @@ void app_scene_uds_set_diagnostic_session_on_enter(void* context) {
 
 // Scene on event
 bool app_scene_uds_set_diagnostic_session_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
+    App* app = context;
+    if(event.type == SceneManagerEventTypeCustom && event.event <= 3) {
+        session = event.event + 1;
+        selected_item = event.event;
+        scene_manager_next_scene(app->scene_manager, app_scene_uds_set_session_response);
+        return true;
+    }
     return false;
 }
 
@@ -57,7 +60,7 @@ void app_scene_uds_set_session_response_on_enter(void* context) {
     view_dispatcher_switch_to_view(app->view_dispatcher, ViewWidget);
 
     app->thread =
-        furi_thread_alloc_ex("SetSessionThread", 1024, set_diagnostic_session_thread, app);
+        furi_thread_alloc_ex("SetSessionThread", 4096, set_diagnostic_session_thread, app);
     furi_thread_start(app->thread);
 }
 
@@ -76,28 +79,24 @@ bool app_scene_uds_set_session_response_on_event(void* context, SceneManagerEven
 // Scene on exit for the response
 void app_scene_uds_set_session_response_on_exit(void* context) {
     App* app = context;
+    app_uds_stop_worker(app);
     widget_reset(app->widget);
-
-    furi_thread_join(app->thread);
-    furi_thread_free(app->thread);
 }
 
 // Thread to work
 static int32_t set_diagnostic_session_thread(void* context) {
     App* app = context;
-    MCP2515* CAN = app->mcp_can;
 
     FuriString* text = app->text;
 
     furi_string_reset(text);
 
-    UDS_SERVICE* uds_service = uds_service_alloc(
-        app->uds_send_id, app->uds_received_id, CAN->mode, CAN->clck, CAN->bitRate);
+    UDS_SERVICE* uds_service = app_uds_open(app);
 
-    if(uds_init(uds_service)) {
-        furi_delay_ms(500);
+    if(uds_service) {
 
         if(uds_set_diagnostic_session(uds_service, (diagnostic_session)session)) {
+            app->uds_session_type = session;
             widget_add_string_multiline_element(
                 app->widget, 64, 32, AlignCenter, AlignCenter, FontPrimary, "Session Set Okay");
 

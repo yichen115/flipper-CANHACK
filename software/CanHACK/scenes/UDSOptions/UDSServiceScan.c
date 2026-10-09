@@ -1,7 +1,5 @@
 #include "../../app_user.h"
 
-#define SVC_SCAN_DELAY_MS       50  // Delay between each service probe
-#define SVC_KEEPALIVE_INTERVAL  50  // Send TesterPresent every N iterations
 
 static int32_t uds_service_scan_thread(void* context);
 
@@ -24,100 +22,47 @@ bool app_scene_uds_service_scan_on_event(void* context, SceneManagerEvent event)
 
 void app_scene_uds_service_scan_on_exit(void* context) {
     App* app = context;
-    furi_thread_join(app->thread);
-    furi_thread_free(app->thread);
+    app_uds_stop_worker(app);
     text_box_reset(app->textBox);
     uds_stop_keepalive();
 }
 
 static int32_t uds_service_scan_thread(void* context) {
     App* app = context;
-    MCP2515* mcp = app->mcp_can;
-    FuriString* text = app->text;
-
-    furi_string_reset(text);
-
-    UDS_SERVICE* uds = uds_service_alloc(
-        app->uds_send_id, app->uds_received_id, MCP_NORMAL, mcp->clck, mcp->bitRate);
-
-    if(!uds_init(uds)) {
-        furi_string_cat_printf(text, "Device not connected\n");
-        text_box_set_text(app->textBox, furi_string_get_cstr(text));
-        free_uds(uds);
+    UDS_SERVICE* uds = app_uds_open(app);
+    if(!uds) {
+        text_box_set_text(app->textBox, "CAN/session init failed");
         return 0;
     }
-
-    furi_delay_ms(500);
-
-    furi_string_cat_printf(
-        text,
-        "TX:0x%lX RX:0x%lX\nScanning services...\n\n",
-        app->uds_send_id,
-        app->uds_received_id);
-    text_box_set_text(app->textBox, furi_string_get_cstr(text));
-
-    uint8_t found_count = 0;
-    uint16_t iter_count = 0;
-
-    for(uint16_t svc_id = 0x00; svc_id <= 0xFF; svc_id++) {
-        if(!furi_hal_gpio_read(&gpio_button_back)) break;
-
-        // Inter-request delay to avoid overwhelming the ECU
-        furi_delay_ms(SVC_SCAN_DELAY_MS);
-
-        // Periodic TesterPresent to maintain session
-        iter_count++;
-        if(iter_count % SVC_KEEPALIVE_INTERVAL == 0) {
-            uds_tester_present(uds);
-            furi_delay_ms(10);
+    furi_string_reset(app->data);
+    furi_string_set(app->text, "Service scan\n");
+    uint16_t found = 0;
+    uint16_t no_response = 0;
+    uint32_t last_update = furi_get_tick() - 100;
+    uint8_t response[UDS_PAYLOAD_MAX];
+    for(uint16_t service = 0; service <= 0xFF && !uds_worker_cancelled(); service++) {
+        uds_keepalive(uds);
+        uint8_t request = service;
+        size_t len = 0;
+        UdsStatus status = uds_request_payload(uds, &request, 1, response, sizeof(response), &len);
+        if(status == UdsOk || (status == UdsNegative && response[2] != 0x11)) {
+            found++;
+            if(furi_string_size(app->data) > 6000) furi_string_set(app->data, "Earlier results omitted\n");
+            furi_string_cat_printf(app->data, "%02X %s: ", service, uds_get_service_name(service));
+            if(status == UdsOk) furi_string_cat_printf(app->data, "positive\n");
+            else furi_string_cat_printf(app->data, "NRC %02X %s\n", response[2], uds_get_nrc_name(response[2]));
+        } else if(status != UdsNegative && status != UdsCancelled) no_response++;
+        uint32_t now = furi_get_tick();
+        if(now - last_update >= 100 || service == 0xFF) {
+            furi_string_printf(app->text, "Service %02X / FF\nSupported/evidence %u\nNo valid response %u\n%s\nBACK: cancel",
+                service, found, no_response, furi_string_get_cstr(app->data));
+            text_box_set_text(app->textBox, furi_string_get_cstr(app->text));
+            last_update = now;
         }
-
-        uint8_t data[1] = {(uint8_t)svc_id};
-        CANFRAME frames_to_send[2] = {0};
-        CANFRAME frame_to_received = {0};
-
-        bool got_response = uds_multi_frame_request(
-            uds, data, 1, frames_to_send, 1, &frame_to_received);
-
-        if(!got_response) continue;
-
-        bool is_supported = false;
-
-        if(frame_to_received.buffer[1] != 0x7F) {
-            is_supported = true;
-        } else if(frame_to_received.buffer[3] != UDS_NRC_SERVICE_NOT_SUPPORTED) {
-            is_supported = true;
-        }
-
-        if(is_supported) {
-            found_count++;
-            const char* name = uds_get_service_name((uint8_t)svc_id);
-            if(frame_to_received.buffer[1] != 0x7F) {
-                furi_string_cat_printf(
-                    text, "0x%02X %s [+]\n", (uint8_t)svc_id, name);
-            } else {
-                uint8_t nrc = frame_to_received.buffer[3];
-                furi_string_cat_printf(
-                    text,
-                    "0x%02X %s\n  NRC:0x%02X %s\n",
-                    (uint8_t)svc_id,
-                    name,
-                    nrc,
-                    uds_get_nrc_name(nrc));
-            }
-            text_box_set_text(app->textBox, furi_string_get_cstr(text));
-        }
+        if(!app_uds_delay(uds, app->uds_gap_ms)) break;
     }
-
-    if(found_count == 0) {
-        furi_string_cat_printf(text, "No services found\n");
-    } else {
-        furi_string_cat_printf(text, "\nFound %u service(s)\n", found_count);
-    }
-
-    furi_string_cat_printf(text, "Scan complete.");
-    text_box_set_text(app->textBox, furi_string_get_cstr(text));
-
+    furi_string_cat_printf(app->text, "\n%s", uds_worker_cancelled() ? "Cancelled" : "Scan complete");
+    text_box_set_text(app->textBox, furi_string_get_cstr(app->text));
     free_uds(uds);
     return 0;
 }

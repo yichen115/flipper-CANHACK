@@ -1,8 +1,7 @@
 #include "frame_queue.h"
 
 FrameCANQueueNode* frame_can_queue_node_alloc() {
-    FrameCANQueueNode* node = malloc(sizeof(FrameCANQueueNode));
-    return node;
+    return malloc(sizeof(FrameCANQueueNode));
 }
 
 void frame_can_queue_node_free(FrameCANQueueNode* node) {
@@ -12,14 +11,17 @@ void frame_can_queue_node_free(FrameCANQueueNode* node) {
 FrameCANQueue* frame_can_queue_alloc() {
     FrameCANQueue* frame_queue = malloc(sizeof(FrameCANQueue));
 
-    frame_queue->first_node = NULL;
-    frame_queue->last_node = NULL;
+    if(!frame_queue) return NULL;
+
+    frame_queue->head = NULL;
+    frame_queue->tail = NULL;
 
     return frame_queue;
 }
 
 void frame_can_queue_free(FrameCANQueue* frame_queue) {
-    FrameCANQueueNode* node = frame_queue->last_node;
+    if(!frame_queue) return;
+    FrameCANQueueNode* node = frame_queue->head;
     while(node != NULL) {
         FrameCANQueueNode* next = node->next_node;
         free(node);
@@ -29,39 +31,31 @@ void frame_can_queue_free(FrameCANQueue* frame_queue) {
 }
 
 void frame_can_queue_push(FrameCANQueue* queue, CANFRAME frame) {
+    if(!queue) return;
     FrameCANQueueNode* new_node = frame_can_queue_node_alloc();
+    if(!new_node) return;
     new_node->frame = frame;
 
-    new_node->next_node = queue->last_node;
-    queue->last_node = new_node;
-
-    if(queue->first_node == NULL) queue->first_node = new_node;
+    new_node->next_node = NULL;
+    if(queue->tail) {
+        queue->tail->next_node = new_node;
+    } else {
+        queue->head = new_node;
+    }
+    queue->tail = new_node;
 }
 
 void frame_can_queue_pop(FrameCANQueue* queue) {
-    FrameCANQueueNode* node_ptr = queue->last_node;
-    if(node_ptr != NULL) {
-        if(node_ptr->next_node != NULL) {
-            while(true) {
-                if(node_ptr->next_node == queue->first_node) {
-                    break;
-                } else {
-                    node_ptr = node_ptr->next_node;
-                }
-            }
+    if(!queue) return;
+    FrameCANQueueNode* node = queue->head;
+    if(!node) return;
 
-            frame_can_queue_node_free(node_ptr->next_node);
-            queue->first_node = node_ptr;
-            queue->first_node->next_node = NULL;
-        } else {
-            frame_can_queue_node_free(node_ptr);
-            queue->last_node = NULL;
-            queue->first_node = NULL;
-        }
-    }
+    queue->head = node->next_node;
+    if(!queue->head) queue->tail = NULL;
+    frame_can_queue_node_free(node);
 }
 
 CANFRAME* frame_can_queue_get(FrameCANQueue* queue) {
-    if(queue->first_node == NULL) return NULL;
-    return &queue->first_node->frame;
+    if(!queue || queue->head == NULL) return NULL;
+    return &queue->head->frame;
 }

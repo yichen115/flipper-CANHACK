@@ -40,11 +40,23 @@ char* pid_codes_name[] = {
 
 // Init the obdii
 bool pid_init(OBDII* obdii) {
+    if(!obdii) return false;
     obdii->CAN = mcp_alloc(MCP_NORMAL, MCP_8MHZ, obdii->bitrate);
+    if(!obdii->CAN) return false;
 
-    if(mcp2515_init(obdii->CAN) != ERROR_OK) return false;
+    if(mcp2515_init(obdii->CAN) != ERROR_OK) {
+        free_mcp2515(obdii->CAN);
+        obdii->CAN = NULL;
+        return false;
+    }
 
     obdii->codes = (pid_code*)malloc(200 * (sizeof(pid_code)));
+    if(!obdii->codes) {
+        deinit_mcp2515(obdii->CAN);
+        free_mcp2515(obdii->CAN);
+        obdii->CAN = NULL;
+        return false;
+    }
 
     init_mask(obdii->CAN, 0, 0x7FF);
     init_filter(obdii->CAN, 0, 0x7E8);
@@ -63,6 +75,7 @@ bool pid_init(OBDII* obdii) {
         obdii->frame_to_send.buffer[i] = 0;
     }
 
+    obdii->initialized = true;
     return true;
 }
 
@@ -454,8 +467,13 @@ bool get_ECU_name(OBDII* obdii, FuriString* ecu_name) {
 
 // It works to free
 void pid_deinit(OBDII* obdii) {
-    deinit_mcp2515(obdii->CAN);
+    if(!obdii) return;
+    if(obdii->initialized) deinit_mcp2515(obdii->CAN);
+    free_mcp2515(obdii->CAN);
+    obdii->CAN = NULL;
     free(obdii->codes);
+    obdii->codes = NULL;
+    obdii->initialized = false;
 }
 
 // Calculate the engine speed

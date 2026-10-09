@@ -114,8 +114,7 @@ bool app_scene_uds_security_seed_result_on_event(void* context, SceneManagerEven
 
 void app_scene_uds_security_seed_result_on_exit(void* context) {
     App* app = context;
-    furi_thread_join(app->thread);
-    furi_thread_free(app->thread);
+    app_uds_stop_worker(app);
     text_box_reset(app->textBox);
 }
 
@@ -151,7 +150,7 @@ static int32_t uds_security_seed_scan_thread(void* context) {
     uint8_t found_count = 0;
 
     for(uint8_t level = 0x01; level <= 0x41; level += 2) {
-        if(!furi_hal_gpio_read(&gpio_button_back)) break;
+        if(uds_worker_cancelled()) break;
 
         // Maintain session with TesterPresent before re-setting session
         uds_tester_present(uds);
@@ -227,7 +226,7 @@ static int32_t uds_security_seed_dump_thread(void* context) {
 
     uint32_t capture_count = 0;
 
-    while(furi_hal_gpio_read(&gpio_button_back)) {
+    while(!uds_worker_cancelled()) {
         // Maintain session with TesterPresent
         uds_tester_present(uds);
         furi_delay_ms(20);

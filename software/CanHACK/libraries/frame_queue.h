@@ -6,8 +6,9 @@ typedef struct FrameCANQueueNode {
 } FrameCANQueueNode;
 
 typedef struct {
-    FrameCANQueueNode* last_node;
-    FrameCANQueueNode* first_node;
+    /* FIFO queue: head is the next item to read, tail is the insertion end. */
+    FrameCANQueueNode* head;
+    FrameCANQueueNode* tail;
 } FrameCANQueue;
 
 FrameCANQueue* frame_can_queue_alloc();

@@ -89,6 +89,7 @@ typedef struct {
     MCP_BITRATE bitrate;
 
     pid_code* codes;
+    bool initialized;
 } OBDII;
 
 extern char* pid_codes_name[];

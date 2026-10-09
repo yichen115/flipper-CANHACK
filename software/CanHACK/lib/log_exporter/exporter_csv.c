@@ -6,7 +6,7 @@
 #define PATHLOGS    APP_DATA_PATH("logs")
 
 #define CSV_HEADER       "Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8\n"
-#define CSV_FORMAT_FRAME "%d,%s,%s,%s,0,%d,%s,\n"
+#define CSV_FORMAT_FRAME "%lu,%s,%s,%s,0,%d,%s,\n"
 #define DIR_RX           "Rx"
 #define DIR_TX           "Tx"
 
@@ -20,7 +20,7 @@ void csv_frame_format(FrameCAN* frame, FuriString* csv_format) {
     furi_string_printf(
         csv_format,
         CSV_FORMAT_FRAME,
-        *frame->timestamp,
+        (unsigned long)*frame->timestamp,
         furi_string_get_cstr(frame->can_id),
         *frame->extended ? "true" : "false",
         !furi_string_cmp_str(frame->dir, "r") ? DIR_RX :

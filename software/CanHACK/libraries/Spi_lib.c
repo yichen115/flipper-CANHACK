@@ -55,6 +55,7 @@ static void spi_bus_callback(const FuriHalSpiBusHandle* handle, FuriHalSpiBusHan
 //  This is to Init the SPI Communication
 FuriHalSpiBusHandle* spi_alloc() {
     FuriHalSpiBusHandle* spi = malloc(sizeof(FuriHalSpiBusHandle));
+    if(!spi) return NULL;
     spi->bus = BUS;
     spi->callback = &spi_bus_callback;
     spi->cs = CS;
@@ -66,6 +67,7 @@ FuriHalSpiBusHandle* spi_alloc() {
 
 // Function to send data
 bool spi_send(FuriHalSpiBusHandle* spi, uint8_t* buffer, uint8_t length) {
+    if(!spi || (!buffer && length > 0)) return false;
     furi_hal_spi_acquire(spi);
     bool ret = furi_hal_spi_bus_tx(spi, buffer, length, TIMEOUT_SPI);
     furi_hal_spi_release(spi);
@@ -74,6 +76,7 @@ bool spi_send(FuriHalSpiBusHandle* spi, uint8_t* buffer, uint8_t length) {
 
 // Function to read register
 bool spi_send_and_read(FuriHalSpiBusHandle* spi, uint8_t* action_address, uint8_t addr_len, uint8_t* data_read, uint8_t data_len) {
+    if(!spi || (!action_address && addr_len > 0) || (!data_read && data_len > 0)) return false;
     furi_hal_spi_acquire(spi);
     bool ret =
         (furi_hal_spi_bus_tx(spi, action_address, addr_len, TIMEOUT_SPI) &&

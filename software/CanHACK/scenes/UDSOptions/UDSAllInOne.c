@@ -5,13 +5,14 @@
 
 // Static context
 static AllInOneContext allinone_ctx = {0};
+static UDS_SERVICE allinone_uds;
+static uint32_t allinone_gap_ms;
 static uint32_t allinone_scan_start = 0x700;
 static uint32_t allinone_scan_end = 0x7FF;
 
 // Forward declarations
 static int32_t allinone_discovery_thread(void* context);
 static bool set_diagnostic_session(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, SessionType session);
-static void keepalive_timer_callback(void* context);
 static void start_keepalive(App* app, SessionType session);
 static void stop_keepalive(void);
 static uint16_t* scan_dids(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, uint16_t* count);
@@ -85,6 +86,7 @@ static uint32_t calculate_key(uint32_t seed, uint8_t seed_len, uint16_t algo) {
 
 // Check if algorithm is valid for given seed length
 static bool is_algo_valid(uint8_t seed_len, uint16_t algo) {
+    if(!seed_len || seed_len > 4) return false;
     if(algo == ALGO_BITWISE_NOT) {
         return true;  // Works for any length
     } else if(algo >= ALGO_XOR_RANGE_START && algo < ALGO_XOR_RANGE_START + ALGO_XOR_RANGE_COUNT) {
@@ -119,7 +121,7 @@ static bool verify_key_with_ecu(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id,
     
     CANFRAME response = {0};
     uint32_t timeout = 0;
-    while(timeout < 10000) {
+    while(timeout < 10000 && !uds_worker_cancelled()) {
         if(read_can_message(CAN, &response) == ERROR_OK) {
             if(response.canId == rx_id) {
                 // Positive response 0x67 or negative 0x7F
@@ -141,7 +143,8 @@ static bool bruteforce_key(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id,
                            uint32_t* found_key, uint16_t* found_algo) {
     
     // Try each algorithm in order
-    for(uint16_t algo = 0; algo < ALGO_COUNT; algo++) {
+    for(uint16_t algo = 0; algo < ALGO_COUNT && !uds_worker_cancelled(); algo++) {
+        uds_keepalive(&allinone_uds);
         if(!is_algo_valid(seed_len, algo)) continue;
         
         uint32_t key = calculate_key(seed, seed_len, algo);
@@ -157,6 +160,7 @@ static bool bruteforce_key(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id,
 }
 
 void allinone_context_init(AllInOneContext* ctx) {
+    if(!ctx) return;
     memset(ctx, 0, sizeof(AllInOneContext));
     ctx->scan_start_id = allinone_scan_start;
     ctx->scan_end_id = allinone_scan_end;
@@ -165,6 +169,7 @@ void allinone_context_init(AllInOneContext* ctx) {
 }
 
 void allinone_context_free(AllInOneContext* ctx) {
+    if(!ctx) return;
     if(ctx->found_ecus) {
         free(ctx->found_ecus);
         ctx->found_ecus = NULL;
@@ -180,15 +185,12 @@ void allinone_context_free(AllInOneContext* ctx) {
         free(ctx->ecu_results);
         ctx->ecu_results = NULL;
     }
-    if(ctx->keepalive_timer) {
-        furi_timer_free(ctx->keepalive_timer);
-        ctx->keepalive_timer = NULL;
-    }
-    furi_record_close(RECORD_STORAGE);
+    if(ctx->storage) furi_record_close(RECORD_STORAGE);
     memset(ctx, 0, sizeof(AllInOneContext));
 }
 
 bool allinone_create_result_file(AllInOneContext* ctx) {
+    if(!ctx || !ctx->storage) return false;
     DateTime datetime;
     furi_hal_rtc_get_datetime(&datetime);
     
@@ -202,6 +204,7 @@ bool allinone_create_result_file(AllInOneContext* ctx) {
     storage_simply_mkdir(ctx->storage, PATHLOGS);
     
     ctx->result_file = storage_file_alloc(ctx->storage);
+    if(!ctx->result_file) return false;
     if(!storage_file_open(ctx->result_file, ctx->result_file_path, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
         storage_file_free(ctx->result_file);
         ctx->result_file = NULL;
@@ -211,7 +214,7 @@ bool allinone_create_result_file(AllInOneContext* ctx) {
 }
 
 void allinone_close_result_file(AllInOneContext* ctx) {
-    if(ctx->result_file) {
+    if(ctx && ctx->result_file) {
         storage_file_close(ctx->result_file);
         storage_file_free(ctx->result_file);
         ctx->result_file = NULL;
@@ -219,7 +222,7 @@ void allinone_close_result_file(AllInOneContext* ctx) {
 }
 
 void allinone_write_string(AllInOneContext* ctx, const char* str) {
-    if(ctx->result_file) {
+    if(ctx && ctx->result_file && str) {
         storage_file_write(ctx->result_file, str, strlen(str));
     }
 }
@@ -240,6 +243,7 @@ void allinone_write_header(AllInOneContext* ctx) {
 }
 
 void allinone_write_ecu_header(AllInOneContext* ctx, ECUInfo* ecu) {
+    if(!ctx || !ecu) return;
     char buf[128];
     snprintf(buf, sizeof(buf),
         "=== ECU %d ===\nTX ID: 0x%03lX\nRX ID: 0x%03lX\n\n",
@@ -261,6 +265,7 @@ void allinone_write_session_header(AllInOneContext* ctx, SessionType session) {
 }
 
 void allinone_write_did_results(AllInOneContext* ctx, uint16_t* dids, uint16_t count) {
+    if(!ctx || (count > 0 && !dids)) return;
     char buf[64];
     allinone_write_string(ctx, "[DID Scan]\nFound DIDs:\n");
     if(count == 0) {
@@ -275,6 +280,7 @@ void allinone_write_did_results(AllInOneContext* ctx, uint16_t* dids, uint16_t c
 }
 
 void allinone_write_security_results(AllInOneContext* ctx, SecurityLevelInfo* levels, uint8_t count) {
+    if(!ctx || (count > 0 && !levels)) return;
     char buf[256];
     allinone_write_string(ctx, "[Security Access]\n");
     if(count == 0) {
@@ -305,123 +311,69 @@ void allinone_write_footer(AllInOneContext* ctx) {
     allinone_write_string(ctx, "=== END OF REPORT ===\n");
 }
 
-static void keepalive_timer_callback(void* context) {
-    App* app = context;
-    if(!allinone_ctx.keepalive_running || allinone_ctx.current_session == SessionType_Default) {
-        return;
-    }
 
-    // Send Tester Present (0x3E 0x80)
-    // 0x80 = suppressPositiveResponseMessage, ECU will not reply
-    CANFRAME frame = {0};
-    frame.canId = app->uds_send_id;
-    frame.data_length = 8;
-    frame.buffer[0] = 0x02;  // PCI: 2 bytes following
-    frame.buffer[1] = 0x3E;  // Service: TesterPresent
-    frame.buffer[2] = 0x80;  // Sub-function: suppress response
-    for(uint8_t i = 3; i < 8; i++) frame.buffer[i] = 0xCC;
-
-    // Use the app's existing MCP2515 - SPI acquire/release provides mutual exclusion
-    send_can_frame(app->mcp_can, &frame);
-}
 
 static void start_keepalive(App* app, SessionType session) {
-    allinone_ctx.current_session = session;
-    allinone_ctx.keepalive_running = true;
-    if(!allinone_ctx.keepalive_timer) {
-        allinone_ctx.keepalive_timer = furi_timer_alloc(keepalive_timer_callback, FuriTimerTypePeriodic, app);
-    }
-    furi_timer_start(allinone_ctx.keepalive_timer, ALLINONE_KEEPALIVE_INTERVAL_MS);
+    UNUSED(app);
+    allinone_uds.session = session;
+    allinone_uds.last_keepalive_ms = furi_get_tick();
 }
 
 static void stop_keepalive(void) {
-    allinone_ctx.keepalive_running = false;
-    if(allinone_ctx.keepalive_timer) {
-        furi_timer_stop(allinone_ctx.keepalive_timer);
-    }
+    allinone_uds.session = 1;
 }
 
 static bool set_diagnostic_session(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, SessionType session) {
-    CANFRAME frame = {0};
-    frame.canId = tx_id;
-    frame.data_length = 8;
-    frame.buffer[0] = 0x02;
-    frame.buffer[1] = 0x10;
-    frame.buffer[2] = session;
-    for(uint8_t i = 3; i < 8; i++) frame.buffer[i] = 0xCC;
-    
-    if(send_can_frame(CAN, &frame) != ERROR_OK) {
-        return false;
-    }
-    
-    CANFRAME response = {0};
-    uint32_t timeout = 0;
-    while(timeout < 10000) {
-        if(read_can_message(CAN, &response) == ERROR_OK) {
-            if(response.canId == rx_id && response.buffer[1] == 0x50) {
-                return true;
-            }
-        }
-        furi_delay_us(1);
-        timeout++;
-    }
-    return false;
+    allinone_uds.CAN = CAN;
+    allinone_uds.id_to_send = tx_id;
+    allinone_uds.id_to_received = rx_id;
+    uint8_t request[] = {0x10, session};
+    uint8_t response[8];
+    size_t len = 0;
+    return uds_request_payload(&allinone_uds, request, sizeof(request), response, sizeof(response), &len) == UdsOk;
 }
 
 static uint16_t* scan_dids(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, uint16_t* count) {
-    uint16_t* found_dids = malloc(256 * sizeof(uint16_t));
+    if(!count) return NULL;
     *count = 0;
-    
-    for(uint8_t range_idx = 0; range_idx < ALLINONE_DID_RANGES_COUNT; range_idx++) {
-        uint16_t start = allinone_did_ranges[range_idx].start;
-        uint16_t end = allinone_did_ranges[range_idx].end;
-        
-        for(uint32_t did = start; did <= end && *count < 256; did++) {
-            CANFRAME request = {0};
-            request.canId = tx_id;
-            request.data_length = 8;
-            request.buffer[0] = 0x03;
-            request.buffer[1] = 0x22;
-            request.buffer[2] = (uint8_t)(did >> 8);
-            request.buffer[3] = (uint8_t)(did & 0xFF);
-            for(uint8_t i = 4; i < 8; i++) request.buffer[i] = 0xCC;
-            
-            if(send_can_frame(CAN, &request) != ERROR_OK) continue;
-            
-            CANFRAME response = {0};
-            uint32_t timeout = 0;
-            bool got_response = false;
-            
-            while(timeout < 5000) {
-                if(read_can_message(CAN, &response) == ERROR_OK) {
-                    if(response.canId == rx_id) {
-                        uint8_t pci = response.buffer[0];
-                        uint8_t service = response.buffer[1];
-                        // Only positive response (0x62) or first frame (0x1X) count as positive
-                        if(service == 0x62 || (pci & 0xF0) == 0x10) {
-                            got_response = true;
-                            break;
-                        }
-                    }
+    if(!CAN) return NULL;
+    uint16_t* found_dids = malloc(256 * sizeof(uint16_t));
+    if(!found_dids) return NULL;
+    allinone_uds.CAN = CAN;
+    allinone_uds.id_to_send = tx_id;
+    allinone_uds.id_to_received = rx_id;
+    uint8_t response[UDS_PAYLOAD_MAX];
+    for(size_t range = 0; range < COUNT_OF(allinone_did_ranges); range++) {
+        for(uint32_t did = allinone_did_ranges[range].start;
+            did <= allinone_did_ranges[range].end && *count < 256 && !uds_worker_cancelled(); did++) {
+            uint8_t request[] = {0x22, did >> 8, did & 0xFF};
+            size_t len = 0;
+            uds_keepalive(&allinone_uds);
+            UdsStatus status = uds_request_payload(&allinone_uds, request, sizeof(request), response, sizeof(response), &len);
+            if(status == UdsOk) {
+                found_dids[(*count)++] = did;
+                char heading[48];
+                snprintf(heading, sizeof(heading), "DID 0x%04lX [%u bytes]:", did, (unsigned)(len - 3));
+                allinone_write_string(&allinone_ctx, heading);
+                for(size_t i = 3; i < len; i++) {
+                    char byte[4];
+                    snprintf(byte, sizeof(byte), " %02X", response[i]);
+                    allinone_write_string(&allinone_ctx, byte);
                 }
-                furi_delay_us(1);
-                timeout++;
+                allinone_write_string(&allinone_ctx, "\n");
             }
-            
-            if(got_response) {
-                found_dids[*count] = (uint16_t)did;
-                (*count)++;
-            }
+            if(!app_uds_delay(&allinone_uds, allinone_gap_ms)) break;
         }
     }
-    
     return found_dids;
 }
 
 static void test_security_levels(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, SecurityLevelInfo* levels, uint8_t* count) {
+    if(!CAN || !levels || !count) return;
     *count = 0;
     
-    for(uint8_t level = 0x01; level <= ALLINONE_MAX_SECURITY_LEVEL && *count < 16; level += 2) {
+    for(uint8_t level = 0x01; level <= ALLINONE_MAX_SECURITY_LEVEL && *count < 16 && !uds_worker_cancelled(); level += 2) {
+        uds_keepalive(&allinone_uds);
         SecurityLevelInfo* info = &levels[*count];
         info->level = level;
         info->supported = false;
@@ -446,9 +398,9 @@ static void test_security_levels(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, S
         uint32_t timeout = 0;
         bool got_response = false;
         
-        while(timeout < 10000) {
+        while(timeout < 10000 && !uds_worker_cancelled()) {
             if(read_can_message(CAN, &response) == ERROR_OK) {
-                if(response.canId == rx_id) {
+                if(response.canId == rx_id && response.data_length >= 2) {
                     got_response = true;
                     break;
                 }
@@ -459,7 +411,7 @@ static void test_security_levels(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, S
         
         if(!got_response) continue;
         
-        if(response.buffer[1] == 0x67) {
+        if(response.data_length >= 2 && response.buffer[1] == 0x67) {
             // Positive response - got seed
             info->supported = true;
             info->nrc = 0;
@@ -479,7 +431,7 @@ static void test_security_levels(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, S
                                               info->seed, info->seed_len, 
                                               &info->key, &found_algo);
             info->bruteforce_attempts = found_algo;
-        } else if(response.buffer[1] == 0x7F) {
+        } else if(response.data_length >= 4 && response.buffer[1] == 0x7F) {
             // Negative response
             info->nrc = response.buffer[3];
             if(info->nrc == 0x31) {
@@ -497,6 +449,7 @@ static void test_security_levels(MCP2515* CAN, uint32_t tx_id, uint32_t rx_id, S
 
 static int32_t allinone_discovery_thread(void* context) {
     App* app = context;
+    if(!app || !app->text || !app->mcp_can) return 0;
     FuriString* text = app->text;
     MCP2515* mcp = app->mcp_can;
     
@@ -505,13 +458,28 @@ static int32_t allinone_discovery_thread(void* context) {
     text_box_set_text(app->textBox, furi_string_get_cstr(text));
     
     allinone_context_init(&allinone_ctx);
+    if(allinone_ctx.scan_start_id > 0x7FF) allinone_ctx.scan_start_id = 0x7FF;
+    if(allinone_ctx.scan_end_id > 0x7FF) allinone_ctx.scan_end_id = 0x7FF;
+    allinone_gap_ms = app->uds_gap_ms;
     allinone_ctx.found_ecus = malloc(16 * sizeof(ECUInfo));
+    if(!allinone_ctx.found_ecus) {
+        furi_string_cat_printf(text, "Out of memory\n");
+        text_box_set_text(app->textBox, furi_string_get_cstr(text));
+        allinone_context_free(&allinone_ctx);
+        return 0;
+    }
     
     MCP2515* CAN = mcp_alloc(MCP_NORMAL, mcp->clck, mcp->bitRate);
+    if(!CAN) {
+        furi_string_cat_printf(text, "Out of memory\n");
+        text_box_set_text(app->textBox, furi_string_get_cstr(text));
+        allinone_context_free(&allinone_ctx);
+        return 0;
+    }
     if(mcp2515_init(CAN) != ERROR_OK) {
         furi_string_cat_printf(text, "Device not connected\n");
         text_box_set_text(app->textBox, furi_string_get_cstr(text));
-        free(CAN);
+        free_mcp2515(CAN);
         return 0;
     }
     
@@ -519,39 +487,25 @@ static int32_t allinone_discovery_thread(void* context) {
     init_mask(CAN, 1, 0);
     
     // ECU Discovery
+    uint32_t discovery_start = furi_get_tick();
+    uint32_t last_progress = discovery_start - 100;
     for(uint32_t arb_id = allinone_ctx.scan_start_id; arb_id <= allinone_ctx.scan_end_id; arb_id++) {
-        if(!furi_hal_gpio_read(&gpio_button_back)) break;
-        
-        CANFRAME frame = {0};
-        frame.canId = arb_id;
-        frame.data_length = 8;
-        frame.buffer[0] = 0x02;
-        frame.buffer[1] = 0x10;
-        frame.buffer[2] = 0x01;
-        for(uint8_t i = 3; i < 8; i++) frame.buffer[i] = 0xCC;
-        
-        if(send_can_frame(CAN, &frame) != ERROR_OK) continue;
+        if(uds_worker_cancelled()) break;
         
         CANFRAME response = {0};
-        uint32_t timeout = 0;
-        
-        while(timeout < 5000) {
-            if(read_can_message(CAN, &response) == ERROR_OK) {
-                if(response.buffer[1] == 0x50 || response.buffer[1] == 0x7F) {
-                    allinone_ctx.found_ecus[allinone_ctx.ecu_count].tx_id = arb_id;
-                    allinone_ctx.found_ecus[allinone_ctx.ecu_count].rx_id = response.canId;
-                    allinone_ctx.ecu_count++;
-                    
-                    furi_string_cat_printf(text, "Found ECU: TX=0x%03lX RX=0x%03lX\n",
-                        arb_id, response.canId);
-                    text_box_set_text(app->textBox, furi_string_get_cstr(text));
-                    break;
-                }
-            }
-            furi_delay_us(1);
-            timeout++;
+        if(uds_discovery_probe(CAN, arb_id, app->uds_discovery_wait_ms, &response) &&
+           uds_discovery_verify(CAN, arb_id, response.canId, app->uds_discovery_wait_ms)) {
+            allinone_ctx.found_ecus[allinone_ctx.ecu_count++] = (ECUInfo){arb_id, response.canId};
+            furi_string_cat_printf(text, "Found ECU: TX=0x%03lX RX=0x%03lX\n", arb_id, response.canId);
         }
-        
+        uint32_t now = furi_get_tick();
+        if(arb_id == allinone_ctx.scan_end_id || now - last_progress >= 100) {
+            furi_string_printf(app->data, "%sID %03lX / %03lX\n%lu ms, wait %lu ms\nBACK: cancel",
+                furi_string_get_cstr(text), arb_id, allinone_ctx.scan_end_id,
+                now - discovery_start, app->uds_discovery_wait_ms);
+            text_box_set_text(app->textBox, furi_string_get_cstr(app->data));
+            last_progress = now;
+        }
         if(allinone_ctx.ecu_count >= 16) break;
     }
 
@@ -560,7 +514,7 @@ static int32_t allinone_discovery_thread(void* context) {
         text_box_set_text(app->textBox, furi_string_get_cstr(text));
         allinone_context_free(&allinone_ctx);
         deinit_mcp2515(CAN);
-        free(CAN);
+        free_mcp2515(CAN);
         return 0;
     }
 
@@ -573,7 +527,7 @@ static int32_t allinone_discovery_thread(void* context) {
         text_box_set_text(app->textBox, furi_string_get_cstr(text));
         allinone_context_free(&allinone_ctx);
         deinit_mcp2515(CAN);
-        free(CAN);
+        free_mcp2515(CAN);
         return 0;
     }
 
@@ -582,25 +536,23 @@ static int32_t allinone_discovery_thread(void* context) {
     // Continue testing in this thread instead of spawning a new one
     allinone_ctx.state = AllInOneState_Testing;
 
-    // Re-init CAN for testing phase (reinit, no free+realloc)
-    if(mcp2515_init(CAN) != ERROR_OK) {
-        furi_string_cat_printf(text, "Device disconnected during test\n");
+    allinone_uds = (UDS_SERVICE){.CAN = CAN, .initialized = true,
+        .timeout_ms = app->uds_timeout_ms, .session = 1};
+
+    // Allocate results
+    allinone_ctx.ecu_results = calloc(allinone_ctx.ecu_count, sizeof(ECUTestResult));
+    if(!allinone_ctx.ecu_results) {
+        furi_string_cat_printf(text, "Out of memory\n");
         text_box_set_text(app->textBox, furi_string_get_cstr(text));
         allinone_close_result_file(&allinone_ctx);
         allinone_context_free(&allinone_ctx);
         deinit_mcp2515(CAN);
-        free(CAN);
+        free_mcp2515(CAN);
         return 0;
     }
 
-    init_mask(CAN, 0, 0);
-    init_mask(CAN, 1, 0);
-
-    // Allocate results
-    allinone_ctx.ecu_results = malloc(allinone_ctx.ecu_count * sizeof(ECUTestResult));
-
     // Test each ECU
-    for(uint8_t ecu_idx = 0; ecu_idx < allinone_ctx.ecu_count; ecu_idx++) {
+    for(uint8_t ecu_idx = 0; ecu_idx < allinone_ctx.ecu_count && !uds_worker_cancelled(); ecu_idx++) {
         allinone_ctx.current_ecu_index = ecu_idx;
         ECUInfo* ecu = &allinone_ctx.found_ecus[ecu_idx];
         ECUTestResult* result = &allinone_ctx.ecu_results[ecu_idx];
@@ -619,7 +571,7 @@ static int32_t allinone_discovery_thread(void* context) {
                                    SessionType_Extended, SessionType_Safety};
 
         for(uint8_t s = 0; s < 4; s++) {
-            if(!furi_hal_gpio_read(&gpio_button_back)) break;
+            if(uds_worker_cancelled()) break;
 
             allinone_ctx.current_session_index = s;
             SessionType session = sessions[s];
@@ -678,17 +630,17 @@ static int32_t allinone_discovery_thread(void* context) {
             furi_delay_ms(100);
         }
 
-        if(!furi_hal_gpio_read(&gpio_button_back)) break;
+        if(uds_worker_cancelled()) break;
     }
 
     deinit_mcp2515(CAN);
-    free(CAN);
+    free_mcp2515(CAN);
 
     allinone_write_footer(&allinone_ctx);
     allinone_close_result_file(&allinone_ctx);
 
-    furi_string_cat_printf(text, "\n=== Test Complete ===\nResults saved to:\n%s\n",
-        allinone_ctx.result_file_path);
+    furi_string_cat_printf(text, "\n=== %s ===\nResults saved to:\n%s\n",
+        uds_worker_cancelled() ? "Cancelled (partial report)" : "Test Complete", allinone_ctx.result_file_path);
     text_box_set_text(app->textBox, furi_string_get_cstr(text));
 
     allinone_ctx.state = AllInOneState_Complete;
@@ -713,7 +665,7 @@ static void allinone_end_id_changed(void* context) {
     scene_manager_previous_scene(app->scene_manager);
 }
 
-static void allinone_settings_callback(void* context, uint32_t index) {
+static void allinone_settings_select(void* context, uint32_t index) {
     App* app = context;
     
     switch(index) {
@@ -755,6 +707,11 @@ static void allinone_settings_callback(void* context, uint32_t index) {
     }
 }
 
+static void allinone_settings_callback(void* context, uint32_t index) {
+    App* app = context;
+    view_dispatcher_send_custom_event(app->view_dispatcher, index);
+}
+
 // Settings scene
 void app_scene_uds_allinone_settings_on_enter(void* context) {
     App* app = context;
@@ -775,8 +732,10 @@ void app_scene_uds_allinone_settings_on_enter(void* context) {
 }
 
 bool app_scene_uds_allinone_settings_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
+    if(event.type == SceneManagerEventTypeCustom && event.event <= 2) {
+        allinone_settings_select(context, event.event);
+        return true;
+    }
     return false;
 }
 
@@ -806,11 +765,7 @@ bool app_scene_uds_allinone_run_on_event(void* context, SceneManagerEvent event)
 void app_scene_uds_allinone_run_on_exit(void* context) {
     App* app = context;
 
-    if(app->thread) {
-        furi_thread_join(app->thread);
-        furi_thread_free(app->thread);
-        app->thread = NULL;
-    }
+    app_uds_stop_worker(app);
 
     stop_keepalive();
     allinone_context_free(&allinone_ctx);

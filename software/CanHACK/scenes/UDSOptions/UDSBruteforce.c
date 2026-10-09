@@ -230,8 +230,7 @@ bool app_scene_uds_bruteforce_result_on_event(void* context, SceneManagerEvent e
 
 void app_scene_uds_bruteforce_result_on_exit(void* context) {
     App* app = context;
-    furi_thread_join(app->thread);
-    furi_thread_free(app->thread);
+    app_uds_stop_worker(app);
     text_box_reset(app->textBox);
 }
 
@@ -242,11 +241,11 @@ static void bf_keepalive_wait(UDS_SERVICE* uds, uint32_t wait_ms) {
     const uint32_t keepalive_interval = 2000; // Send TesterPresent every 2s
     uint32_t elapsed = 0;
 
-    while(elapsed < wait_ms) {
+    while(elapsed < wait_ms && !uds_worker_cancelled()) {
         uint32_t chunk = wait_ms - elapsed;
         if(chunk > keepalive_interval) chunk = keepalive_interval;
 
-        furi_delay_ms(chunk);
+        if(!app_uds_delay(uds, chunk)) return;
         elapsed += chunk;
 
         if(elapsed < wait_ms) {
@@ -303,10 +302,10 @@ static int32_t uds_bruteforce_thread(void* context) {
         do {
             retry = false;
 
-            if(!furi_hal_gpio_read(&gpio_button_back)) goto done;
+            if(uds_worker_cancelled()) goto done;
 
             /* Configurable delay between attempts */
-            furi_delay_ms(attempt_delay);
+            if(!app_uds_delay(uds, attempt_delay)) goto done;
 
             /* Step 1: Enter extended session */
             uds_set_diagnostic_session(uds, EXTENDED_UDS_SESSION);

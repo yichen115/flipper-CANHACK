@@ -1,0 +1,51 @@
+.header-actions { display: flex; align-items: center; gap: 8px; }
+.header-actions .icon-button { height: 34px; width: 36px; border-radius: 7px; }
+.header-actions .settings-button svg { width: 18px; height: 18px; }
+.settings-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 0; border: 1px solid #dce5e0; border-radius: 16px; color: var(--ink); background: #f9fbfa; box-shadow: 0 24px 90px #13271e55; }
+.settings-dialog::backdrop { background: #091b20a3; backdrop-filter: blur(7px); }
+.settings-dialog form { display: flex; flex-direction: column; max-height: calc(100dvh - 42px); }
+.settings-heading { display: flex; align-items: center; justify-content: space-between; padding: 22px 24px 19px; border-bottom: 1px solid var(--line); }
+.settings-eyebrow { color: #688777; font-size: 9px; letter-spacing: .16em; font-weight: 700; }
+.settings-heading h2 { margin: 5px 0 0; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
+.settings-heading .icon-button { border: 0; background: transparent; }
+.settings-content { min-height: 0; overflow-y: auto; padding: 0 24px; }
+.settings-section, .settings-dialog .serial-section { padding: 21px 0; border: 0; border-bottom: 1px solid var(--line); }
+.settings-dialog .section-heading { margin-bottom: 14px; }
+.settings-dialog .section-heading h2 { font-size: 13px; }
+.settings-dialog .section-heading > span { margin-left: auto; font-size: 10px; color: #8b9990; }
+.settings-dialog .connection-tools { display: grid; grid-template-columns: minmax(0, 1fr) 128px; gap: 10px; overflow: visible; width: 100%; }
+.settings-dialog .select-wrap { height: 38px; min-width: 0; padding: 0 10px; border-radius: 6px; }
+.settings-dialog .select-wrap select { min-width: 0; width: 100%; font-size: 12px; }
+.settings-dialog .connect-button { grid-column: 2; grid-row: 2; min-width: 0; height: 34px; border-radius: 6px; font-size: 12px; }
+.settings-dialog .connection-state { grid-column: 1; grid-row: 2; font-size: 11px; white-space: normal; overflow-wrap: anywhere; min-height: 15px; }
+.settings-dialog .serial-port-row { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 9px; }
+.settings-dialog .serial-port-row select { min-width: 0; width: 100%; height: 38px; padding: 0 10px; border: 1px solid #ced8d4; border-radius: 6px; color: #405d4e; background: #fff; font-size: 12px; }
+.settings-dialog .serial-port-row .icon-button { width: 38px; height: 38px; border-radius: 6px; }
+.settings-dialog .serial-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+.settings-dialog .serial-actions > span { min-width: 0; color: #829084; font-size: 11px; overflow-wrap: anywhere; }
+.settings-dialog .serial-actions .error { color: #b45741; }
+.settings-dialog .serial-actions button { flex: none; width: 128px; height: 34px; border: 1px solid #bfcfc3; border-radius: 6px; background: #f4f8f5; color: #3c6350; font-size: 12px; cursor: pointer; }
+.settings-dialog button:disabled { opacity: .4; cursor: default; }
+.settings-dialog .safety-settings { border: 0; }
+.threshold-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: #53655b; }
+.threshold-field > span:last-child { display: flex; align-items: center; gap: 10px; color: #829084; }
+.threshold-field input { width: 77px; padding: 7px 8px; border: 1px solid #ced8d4; border-radius: 6px; background: white; color: #304a3c; }
+.safety-settings p { margin: 11px 0 0; color: #7a897f; font-size: 11px; line-height: 1.8; }
+.settings-error { color: #b44835; font-size: 12px; line-height: 1.6; margin: 0 0 16px; }
+.settings-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 15px 24px; border-top: 1px solid var(--line); background: #f0f5f1; }
+.settings-footer button { border: 1px solid #cfdcd3; background: #fff; color: #557161; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.settings-footer #saveSettings { border-color: #236952; background: #236952; color: white; }
+.settings-dialog :focus-visible { outline: 2px solid #478b70; outline-offset: 3px; }
+@media (max-width: 900px) {
+  body { overflow: hidden; }
+  .app-shell { height: 100%; min-height: 0; }
+  .topbar { height: 58px; min-height: 58px; flex: 0 0 58px; flex-wrap: nowrap; }
+  .mobile-tabs { flex: 0 0 39px; }
+  .workspace { height: auto; min-height: 0; }
+}
+@media (max-width: 400px) {
+  .settings-heading { padding: 18px; }
+  .settings-content { padding: 0 18px; }
+  .settings-dialog .connection-tools { grid-template-columns: minmax(0, 1fr) 112px; }
+  .settings-dialog .serial-actions button { width: 112px; }
+}

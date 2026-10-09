@@ -12,10 +12,21 @@ static uint32_t start_id = 0x600;
 static uint32_t end_id = 0x7FF;
 static VariableItem* start_id_item = NULL;
 static VariableItem* end_id_item = NULL;
+static const uint32_t discovery_waits[] = {10, 25, 50, 100};
+static const char* discovery_wait_text[] = {"10 ms", "25 ms", "50 ms", "100 ms"};
+
+static void discovery_wait_changed(VariableItem* item) {
+    App* app = variable_item_get_context(item);
+    uint8_t index = variable_item_get_current_value_index(item);
+    app->uds_discovery_wait_ms = discovery_waits[index];
+    variable_item_set_current_value_text(item, discovery_wait_text[index]);
+}
 
 static void update_id_from_bytes(void) {
     start_id = ((uint32_t)start_id_bytes[0] << 8) | start_id_bytes[1];
     end_id = ((uint32_t)end_id_bytes[0] << 8) | end_id_bytes[1];
+    if(start_id > 0x7FF) start_id = 0x7FF;
+    if(end_id > 0x7FF) end_id = 0x7FF;
 }
 
 static void update_bytes_from_id(void) {
@@ -51,6 +62,10 @@ static void byte_input_callback(void* context) {
 
 void app_scene_uds_discovery_settings_callback(void* context, uint32_t index) {
     App* app = context;
+    view_dispatcher_send_custom_event(app->view_dispatcher, index);
+}
+
+static void discovery_settings_select(App* app, uint32_t index) {
 
     switch(index) {
     case 0: // Start ID
@@ -120,6 +135,13 @@ void app_scene_uds_discovery_settings_on_enter(void* context) {
 
     // Start Scan option
     variable_item_list_add(app->varList, "Start Scan", 0, NULL, app);
+    VariableItem* wait = variable_item_list_add(app->varList, "Wait / ID", COUNT_OF(discovery_waits), discovery_wait_changed, app);
+    uint8_t wait_index = 0;
+    for(uint8_t i = 0; i < COUNT_OF(discovery_waits); i++) {
+        if(app->uds_discovery_wait_ms == discovery_waits[i]) wait_index = i;
+    }
+    variable_item_set_current_value_index(wait, wait_index);
+    variable_item_set_current_value_text(wait, discovery_wait_text[wait_index]);
 
     variable_item_list_set_enter_callback(app->varList, app_scene_uds_discovery_settings_callback, app);
     variable_item_list_set_selected_item(app->varList, 0);
@@ -128,8 +150,11 @@ void app_scene_uds_discovery_settings_on_enter(void* context) {
 }
 
 bool app_scene_uds_discovery_settings_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
+    App* app = context;
+    if(event.type == SceneManagerEventTypeCustom) {
+        discovery_settings_select(app, event.event);
+        return true;
+    }
     return false;
 }
 

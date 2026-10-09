@@ -28,10 +28,11 @@
 #include <log_exporter.h>
 #include <hex_converter.h>
 
-#define PROGRAM_VERSION "v1.1.6.2-simplified"
+#define PROGRAM_VERSION "v1.2.0"
 
 #define PATHEXPORTS APP_DATA_PATH("exports")
 #define PATHLOGS    APP_DATA_PATH("logs")
+#define LOG_PATH_SIZE 256
 
 #define DEVICE_NO_CONNECTED (0xFF)
 
@@ -87,8 +88,8 @@ typedef struct {
     DialogEx* dialog_ex;
     FrameCAN* frame_active;
     FileActive* file_active;
-    bool* can_send_frame;
-    bool* send_timestamp;
+    bool can_send_frame;
+    bool send_timestamp;
     Loading* loading;
 
     uint32_t sniffer_index;
@@ -96,6 +97,10 @@ typedef struct {
 
     uint32_t uds_received_id;
     uint32_t uds_send_id;
+    uint32_t uds_timeout_ms;
+    uint32_t uds_gap_ms;
+    uint32_t uds_discovery_wait_ms;
+    uint8_t uds_session_type;
 
     // ECU Discovery settings
     uint32_t ecu_discovery_start_id;
@@ -118,19 +123,21 @@ typedef struct {
 // This is for the menu Options
 typedef enum {
     SniffingTestOption,
+    CaptureOption,
+    ReplayOption,
     SenderOption,
     UDSOption,
-    TeslaFSDOption,
     SettingsOption,
 } MainMenuOptions;
 
 // These are the events on the main menu
 typedef enum {
     SniffingOptionEvent,
+    CaptureOptionEvent,
+    ReplayOptionEvent,
     SenderOptionEvent,
     SettingsOptionEvent,
     UDSOptionEvent,
-    TeslaFSDOptionEvent,
 } MainMenuEvents;
 
 // This is for the Setting Options
@@ -202,3 +209,7 @@ int32_t worker_sniffing(void* context);
 // UDS Session management
 void uds_stop_keepalive(void);
 bool uds_need_session_select(void);
+
+UDS_SERVICE* app_uds_open(App* app);
+void app_uds_stop_worker(App* app);
+bool app_uds_delay(UDS_SERVICE* uds, uint32_t ms);

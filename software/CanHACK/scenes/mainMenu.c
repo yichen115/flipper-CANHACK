@@ -17,23 +17,27 @@ void basic_scenes_menu_callback(void* context, uint32_t index) {
 
     switch(index) {
     case SniffingTestOption:
-        scene_manager_handle_custom_event(app->scene_manager, SniffingOptionEvent);
+        view_dispatcher_send_custom_event(app->view_dispatcher, SniffingOptionEvent);
         break;
 
     case SenderOption:
-        scene_manager_handle_custom_event(app->scene_manager, SenderOptionEvent);
+        view_dispatcher_send_custom_event(app->view_dispatcher, SenderOptionEvent);
+        break;
+
+    case CaptureOption:
+        view_dispatcher_send_custom_event(app->view_dispatcher, CaptureOptionEvent);
+        break;
+
+    case ReplayOption:
+        view_dispatcher_send_custom_event(app->view_dispatcher, ReplayOptionEvent);
         break;
 
     case UDSOption:
-        scene_manager_handle_custom_event(app->scene_manager, UDSOptionEvent);
-        break;
-
-    case TeslaFSDOption:
-        scene_manager_handle_custom_event(app->scene_manager, TeslaFSDOptionEvent);
+        view_dispatcher_send_custom_event(app->view_dispatcher, UDSOptionEvent);
         break;
 
     case SettingsOption:
-        scene_manager_handle_custom_event(app->scene_manager, SettingsOptionEvent);
+        view_dispatcher_send_custom_event(app->view_dispatcher, SettingsOptionEvent);
         break;
 
     default:
@@ -44,8 +48,8 @@ void basic_scenes_menu_callback(void* context, uint32_t index) {
 void app_scene_menu_on_enter(void* context) {
     App* app = context;
 
-    *app->can_send_frame = false;
-    *app->send_timestamp = false;
+    app->can_send_frame = false;
+    app->send_timestamp = false;
 
     uint32_t state = scene_manager_get_scene_state(app->scene_manager, app_scene_main_menu);
 
@@ -62,11 +66,13 @@ void app_scene_menu_on_enter(void* context) {
     submenu_add_item(
         app->submenu, "Sniffing", SniffingTestOption, basic_scenes_menu_callback, app);
 
+    submenu_add_item(app->submenu, "Capture", CaptureOption, basic_scenes_menu_callback, app);
+
+    submenu_add_item(app->submenu, "Replay", ReplayOption, basic_scenes_menu_callback, app);
+
     submenu_add_item(app->submenu, "Sender", SenderOption, basic_scenes_menu_callback, app);
 
     submenu_add_item(app->submenu, "UDS Services", UDSOption, basic_scenes_menu_callback, app);
-
-    submenu_add_item(app->submenu, "Tesla FSD", TeslaFSDOption, basic_scenes_menu_callback, app);
 
     submenu_add_item(app->submenu, "Settings", SettingsOption, basic_scenes_menu_callback, app);
 
@@ -91,6 +97,7 @@ bool app_scene_menu_on_event(void* context, SceneManagerEvent event) {
 
         case SenderOptionEvent:
             scene_manager_next_scene(app->scene_manager, app_scene_sender_option);
+            consumed = true;
             break;
 
         case SettingsOptionEvent:
@@ -98,13 +105,18 @@ bool app_scene_menu_on_event(void* context, SceneManagerEvent event) {
             consumed = true;
             break;
 
-        case UDSOptionEvent:
-            scene_manager_next_scene(app->scene_manager, app_scene_uds_menu_option);
+        case CaptureOptionEvent:
+            scene_manager_next_scene(app->scene_manager, app_scene_capture_option);
             consumed = true;
             break;
 
-        case TeslaFSDOptionEvent:
-            scene_manager_next_scene(app->scene_manager, app_scene_tesla_fsd_menu_option);
+        case ReplayOptionEvent:
+            scene_manager_next_scene(app->scene_manager, app_scene_replay_option);
+            consumed = true;
+            break;
+
+        case UDSOptionEvent:
+            scene_manager_next_scene(app->scene_manager, app_scene_uds_menu_option);
             consumed = true;
             break;
 

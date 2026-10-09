@@ -3,7 +3,7 @@
 #include <furi.h>
 
 typedef struct {
-    uint16_t* timestamp;
+    uint32_t* timestamp;
     bool* extended;
     FuriString* dir;
     FuriString* can_id;

@@ -9,6 +9,7 @@ import re
 import sys
 import json
 from datetime import datetime
+from html import escape
 from pathlib import Path
 
 
@@ -62,6 +63,21 @@ TEST_DESCRIPTIONS = {
         ]
     }
 }
+
+
+def html_text(value):
+    """Escape report values before inserting them into HTML text/attributes."""
+    return escape(str(value), quote=True)
+
+
+def js_arg(value):
+    """Encode a value for an inline JavaScript string argument."""
+    return html_text(json.dumps(str(value), ensure_ascii=False))
+
+
+def js_data(value):
+    """Serialize chart data without allowing a closing script tag injection."""
+    return json.dumps(value, ensure_ascii=False).replace('</', '<\\/')
 
 
 def parse_report(file_path):
@@ -122,8 +138,9 @@ def parse_report(file_path):
             did_section = re.search(r'\[DID Scan\](.+?)(?=\[Security Access\]|---|$)', 
                                    session_content, re.DOTALL)
             if did_section:
-                did_matches = re.findall(r'0x([0-9A-F]{4})', did_section.group(1))
-                session['dids'] = ['0x' + did for did in did_matches]
+                did_matches = re.findall(r'0x([0-9A-Fa-f]{4})', did_section.group(1))
+                # Preserve report order while removing duplicate entries.
+                session['dids'] = list(dict.fromkeys('0x' + did.upper() for did in did_matches))
             
             # 解析安全访问 - 更新以支持ALGO字段
             security_section = re.search(r'\[Security Access\](.+?)(?=---|$)', 
@@ -482,12 +499,13 @@ def generate_html(report, stats, output_path):
             # DID列表
             dids_html = ''
             if session['dids']:
-                dids_tags = ''.join([f'<span class="did-tag">{did}</span>' for did in session['dids']])
+                dids_tags = ''.join([f'<span class="did-tag">{html_text(did)}</span>' for did in session['dids']])
+                dids_copy = js_arg(', '.join(session['dids']))
                 dids_html = f'''
                 <div class="mt-3">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-xs font-medium text-gray-500">发现 {len(session['dids'])} 个DID</span>
-                        <button onclick="copy('{', '.join(session['dids'])}')" class="copy-btn text-blue-500 text-xs">
+                        <button onclick="copy({dids_copy})" class="copy-btn text-blue-500 text-xs">
                             <i class="fas fa-copy"></i> 复制
                         </button>
                     </div>
@@ -515,14 +533,18 @@ def generate_html(report, stats, output_path):
                         status_class = 'status-unsupported'
                         status_text = '不支持'
                         details = f"NRC: {level['nrc']}"
+
+                    level_copy = js_arg(
+                        f"Level {level['level']}: Seed {level.get('seed', 'N/A')}"
+                    )
                     
                     security_rows += f'''
                     <tr class="border-b border-gray-100 text-sm">
-                        <td class="py-2 px-3 font-medium">L{level['level']}</td>
+                        <td class="py-2 px-3 font-medium">L{html_text(level['level'])}</td>
                         <td class="py-2 px-3"><span class="badge {status_class}">{status_text}</span></td>
-                        <td class="py-2 px-3 text-gray-600 text-xs">{details}</td>
+                        <td class="py-2 px-3 text-gray-600 text-xs">{html_text(details)}</td>
                         <td class="py-2 px-3">
-                            <button onclick="copy('Level {level['level']}: Seed {level.get('seed', 'N/A')}')" class="copy-btn text-gray-400 hover:text-blue-500">
+                            <button onclick="copy({level_copy})" class="copy-btn text-gray-400 hover:text-blue-500">
                                 <i class="fas fa-copy"></i>
                             </button>
                         </td>
@@ -547,7 +569,7 @@ def generate_html(report, stats, output_path):
             sessions_html += f'''
             <div class="border-t pt-3 mt-3">
                 <div class="flex items-center justify-between">
-                    <span class="font-medium text-sm text-gray-700">{session['name']}</span>
+                    <span class="font-medium text-sm text-gray-700">{html_text(session['name'])}</span>
                     <div class="flex gap-2">
                         <span class="badge bg-purple-100 text-purple-700">{len(session['dids'])} DIDs</span>
                         <span class="badge bg-orange-100 text-orange-700">{len(session['security_levels'])} 安全</span>
@@ -557,6 +579,7 @@ def generate_html(report, stats, output_path):
                 {security_html}
             </div>'''
         
+        ecu_copy = js_arg(f"TX: {ecu['tx_id']}, RX: {ecu['rx_id']}")
         ecu_details_html += f'''
         <div class="card mb-4 overflow-hidden">
             <div class="bg-gradient-to-r from-slate-700 to-slate-600 text-white px-4 py-3">
@@ -565,13 +588,13 @@ def generate_html(report, stats, output_path):
                         <i class="fas fa-microchip"></i>
                         <span class="font-semibold">ECU {idx}</span>
                     </div>
-                    <button onclick="copy('TX: {ecu['tx_id']}, RX: {ecu['rx_id']}')" class="copy-btn text-white/70 hover:text-white text-xs">
+                    <button onclick="copy({ecu_copy})" class="copy-btn text-white/70 hover:text-white text-xs">
                         <i class="fas fa-copy"></i> 复制ID
                     </button>
                 </div>
                 <div class="mt-1 text-xs text-white/70 flex gap-4">
-                    <span><i class="fas fa-arrow-up mr-1"></i>{ecu['tx_id']}</span>
-                    <span><i class="fas fa-arrow-down mr-1"></i>{ecu['rx_id']}</span>
+                    <span><i class="fas fa-arrow-up mr-1"></i>{html_text(ecu['tx_id'])}</span>
+                    <span><i class="fas fa-arrow-down mr-1"></i>{html_text(ecu['rx_id'])}</span>
                 </div>
             </div>
             <div class="p-4">
@@ -597,18 +620,18 @@ def generate_html(report, stats, output_path):
 
     # 填充模板
     html = html_template.format(
-        date=report['date'],
-        scan_range=report['scan_range'],
+        date=html_text(report['date']),
+        scan_range=html_text(report['scan_range']),
         total_ecus=stats['total_ecus'],
         total_sessions=stats['total_sessions'],
         total_dids=stats['total_dids'],
         supported_security_levels=stats['supported_security_levels'],
         timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         test_descriptions=test_desc_html,
-        session_labels=json.dumps(session_labels),
-        session_data=json.dumps(session_data),
-        security_data=json.dumps(security_data),
-        bruteforce_data=json.dumps(bruteforce_data),
+        session_labels=js_data(session_labels),
+        session_data=js_data(session_data),
+        security_data=js_data(security_data),
+        bruteforce_data=js_data(bruteforce_data),
         ecu_details=ecu_details_html
     )
 
@@ -618,7 +641,7 @@ def generate_html(report, stats, output_path):
 
 def main():
     if len(sys.argv) < 2:
-        input_file = r'ALLINONE_20260310_233249.txt'
+        input_file = Path(__file__).with_name('ALLINONE_20260310_233249.txt')
     else:
         input_file = sys.argv[1]
     

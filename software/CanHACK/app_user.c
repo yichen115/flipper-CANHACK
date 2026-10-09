@@ -1,11 +1,15 @@
 #include "app_user.h"
+#include <power/power_service/power.h>
+#include <string.h>
 
 void makePaths(App* app) {
-    furi_assert(app);
-    if(!storage_simply_mkdir(app->storage, PATHEXPORTS)) {
+    if(!app || !app->storage || !app->dialogs) return;
+    if(!storage_dir_exists(app->storage, PATHEXPORTS) &&
+       !storage_simply_mkdir(app->storage, PATHEXPORTS)) {
         dialog_message_show_storage_error(app->dialogs, "Cannot create\nexports folder");
     }
-    if(!storage_simply_mkdir(app->storage, PATHLOGS)) {
+    if(!storage_dir_exists(app->storage, PATHLOGS) &&
+       !storage_simply_mkdir(app->storage, PATHLOGS)) {
         dialog_message_show_storage_error(app->dialogs, "Cannot create\nlogs folder");
     }
 }
@@ -25,11 +29,12 @@ static bool app_scene_back_event(void* context) {
 static void app_tick_event(void* context) {
     furi_assert(context);
     App* app = context;
-    UNUSED(app);
+    scene_manager_handle_tick_event(app->scene_manager);
 }
 
 static App* app_alloc() {
-    App* app = malloc(sizeof(App));
+    App* app = calloc(1, sizeof(App));
+    if(!app) return NULL;
     app->scene_manager = scene_manager_alloc(&app_scene_handlers, app);
     app->view_dispatcher = view_dispatcher_alloc();
     view_dispatcher_set_custom_event_callback(app->view_dispatcher, app_scene_custom_callback);
@@ -61,9 +66,6 @@ static App* app_alloc() {
     view_dispatcher_add_view(app->view_dispatcher, DialogView, dialog_ex_get_view(app->dialog_ex));
     app->frame_active = frame_can_alloc();
     app->file_active = file_active_alloc();
-    app->can_send_frame = (bool*)calloc(1, sizeof(bool));
-    app->send_timestamp = (bool*)calloc(1, sizeof(bool));
-
     app->dialogs = furi_record_open(RECORD_DIALOGS);
     app->storage = furi_record_open(RECORD_STORAGE);
     app->log_file = storage_file_alloc(app->storage);
@@ -81,14 +83,19 @@ static App* app_alloc() {
 
     app->frameArray = (CANFRAME*)calloc(100, sizeof(CANFRAME));
 
-    app->log_file_path = (char*)malloc(100 * sizeof(char));
+    app->log_file_path = (char*)malloc(LOG_PATH_SIZE);
 
     app->frame_to_send = malloc(sizeof(CANFRAME));
+    memset(app->frame_to_send, 0, sizeof(CANFRAME));
 
-    app->obdii.bitrate = app->mcp_can->bitRate;
+    if(app->mcp_can) app->obdii.bitrate = app->mcp_can->bitRate;
 
     app->uds_received_id = UDS_RESPONSE_ID_DEFAULT;
     app->uds_send_id = UDS_REQUEST_ID_DEFAULT;
+    app->uds_timeout_ms = 50;
+    app->uds_gap_ms = 5;
+    app->uds_discovery_wait_ms = 10;
+    app->uds_session_type = 1;
 
     // Initialize ECU Discovery settings to 0 (will use defaults)
     app->ecu_discovery_start_id = 0;
@@ -101,6 +108,7 @@ static App* app_alloc() {
 
 static void app_free(App* app) {
     furi_assert(app);
+    uds_stop_keepalive();
 
     view_dispatcher_remove_view(app->view_dispatcher, LoadingView);
     view_dispatcher_remove_view(app->view_dispatcher, SubmenuView);
@@ -136,9 +144,6 @@ static void app_free(App* app) {
     file_active_free(app->file_active);
     frame_can_free(app->frame_active);
     dialog_ex_free(app->dialog_ex);
-    free(app->can_send_frame);
-    free(app->send_timestamp);
-
     free(app->log_file_path);
     free(app->frameArray);
     free(app->frame_to_send);
@@ -152,6 +157,12 @@ int app_main(void* p) {
     UNUSED(p);
 
     App* app = app_alloc();
+    if(!app) return -1;
+
+    Power* power = furi_record_open(RECORD_POWER);
+    power_enable_otg(power, true);
+    // Allow the external CAN module's supply to settle before it is used.
+    furi_delay_ms(100);
 
     Gui* gui = furi_record_open(RECORD_GUI);
 
@@ -163,6 +174,9 @@ int app_main(void* p) {
     furi_record_close(RECORD_GUI);
 
     app_free(app);
+
+    power_enable_otg(power, false);
+    furi_record_close(RECORD_POWER);
 
     return 0;
 }
